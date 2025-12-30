@@ -44,7 +44,7 @@ ColaVLA addresses these issues by **transferring reasoning from text to a compac
 
 ## ⭐ Motivation (Reasoning Paradigm)
 <div align="center">
-  <img src="assets/illustrate_hr.jpg" alt="Illustration" width="100%">
+  <img src="assets/illustrate_hr.jpg" alt="Illustration" width="70%">
 </div>
 
 We propose **Cognitive Latent Reasoning** to relocate chain-of-thought from discrete text to a compact latent space,
@@ -70,7 +70,7 @@ ColaVLA consists of two key components:
 </div>
 
 <div align="center">
-  <img src="assets/close_loop_results.png" alt="Closed-loop Results" width="100%">
+  <img src="assets/close-loop-results.png" alt="Closed-loop Results" width="100%">
 </div>
 
 We report strong performance on nuScenes in both **open-loop** and **closed-loop** evaluations, with favorable efficiency and robustness.
