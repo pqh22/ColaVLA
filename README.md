@@ -44,7 +44,7 @@ ColaVLA addresses these issues by **transferring reasoning from text to a compac
 
 ## ⭐ Motivation (Reasoning Paradigm)
 <div align="center">
-  <img src="assets/illustrate_hr.png" alt="Illustration" width="100%">
+  <img src="assets/illustrate_hr.jpg" alt="Illustration" width="100%">
 </div>
 
 We propose **Cognitive Latent Reasoning** to relocate chain-of-thought from discrete text to a compact latent space,
