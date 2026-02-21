@@ -1,6 +1,7 @@
 <br>
 <p align="center">
   <h1 align="center"><strong>ColaVLA: Leveraging Cognitive Latent Reasoning for Hierarchical Parallel Trajectory Planning in Autonomous Driving</strong></h1>
+  <h3 align="center">🔥 CVPR 2026 🔥 </h3>
   <p align="center">
     <a href="https://pqh22.github.io/" target="_blank">Qihang Peng</a><sup>1,2,3</sup>&emsp;
     <a href="https://scholar.google.com/citations?user=_XZonAsAAAAJ&hl=en" target="_blank">Xuesong Chen</a><sup>2,3</sup>&emsp;
