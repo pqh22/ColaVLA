@@ -26,6 +26,7 @@
 ---
 
 ## 🔥 News
+- **[2026-02]** Our paper was accept by CVPR2026 ! 🥳 
 - **[2025-12]** We release the [paper](https://arxiv.org/pdf/2512.22939) and the [project page](https://pqh22.github.io/projects/ColaVLA/index.html) for **ColaVLA**.
 - **[TBD]** Code and models will be released. Stay tuned.
 
