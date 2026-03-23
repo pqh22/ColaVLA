@@ -27,9 +27,9 @@
 ---
 
 ## 🔥 News
+- **[2026-03]** Training/evaluation scripts are released !
 - **[2026-02]** Our paper was accept by CVPR2026 ! 🥳 
 - **[2025-12]** We release the [paper](https://arxiv.org/pdf/2512.22939) and the [project page](https://pqh22.github.io/projects/ColaVLA/index.html) for **ColaVLA**.
-- **[TBD]** Code and models will be released. Stay tuned.
 
 ---
 
@@ -91,7 +91,7 @@ Qualitative examples show robust planning under complex multi-agent interactions
 
 ## 📝 TODO
 - \[x\] Release paper and project page.
-- \[ \] Release training / evaluation code.
+- \[x\] Release training / evaluation code.
 - \[ \] Release model checkpoints.
 - \[ \] Provide detailed reproduction instructions.
 
