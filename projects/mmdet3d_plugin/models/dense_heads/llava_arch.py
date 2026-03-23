@@ -1,0 +1,381 @@
+#    Copyright 2023 Haotian Liu
+#
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
+
+
+CONTROLLER_HEART_BEAT_EXPIRATION = 30
+WORKER_HEART_BEAT_INTERVAL = 15
+
+LOGDIR = "."
+
+# Model Constants
+IGNORE_INDEX = -100
+IMAGE_TOKEN_INDEX = -200
+TRAJ_TOKEN_INDEX = -201
+POINT_TOKEN_INDEX = -202
+EGO_TOKEN_INDEX = -203
+DEFAULT_IMAGE_TOKEN = "<image>"
+DEFAULT_IMAGE_PATCH_TOKEN = "<im_patch>"
+DEFAULT_IM_START_TOKEN = "<im_start>"
+DEFAULT_IM_END_TOKEN = "<im_end>"
+
+from abc import ABC, abstractmethod
+
+import torch
+import torch.nn as nn
+
+class LlavaMetaModel:
+
+    def __init__(self, config):
+        super(LlavaMetaModel, self).__init__(config)
+
+class LlavaMetaForCausalLM(ABC):
+
+    @abstractmethod
+    def get_model(self):
+        pass
+
+    def get_vision_tower(self):
+        return self.get_model().get_vision_tower()
+
+    def prepare_inputs_labels_for_multimodal(
+        self, input_ids, position_ids, attention_mask, past_key_values, labels, image_features, image_sizes
+    ):
+        
+        if  image_features is None or input_ids.shape[1] == 1:
+            # if past_key_values is not None and image_features is not None and input_ids.shape[1] == 1:
+            #     target_shape = past_key_values[-1][-1].shape[-2] + 1
+            #     attention_mask = torch.cat((attention_mask, torch.ones(
+            #         (attention_mask.shape[0], target_shape - attention_mask.shape[1]),
+            #         dtype=attention_mask.dtype,
+            #         device=attention_mask.device
+            #     )), dim=1)
+            #     position_ids = torch.sum(attention_mask, dim=1).unsqueeze(-1) - 1
+            return input_ids, position_ids, attention_mask, past_key_values, None, labels
+
+        image_features = image_features.reshape(image_features.shape[0], -1, self.hidden_size).to(dtype=self.dtype)
+
+        # TODO: image start / end is not implemented here to support pretraining.
+        # if getattr(self.config, 'tune_mm_mlp_adapter', False) and getattr(self.config, 'mm_use_im_start_end', False):
+        #     raise NotImplementedError
+
+        # Let's just add dummy tensors if they do not exist,
+        # it is a headache to deal with None all the time.
+        # But it is not ideal, and if you have a better idea,
+        # please open an issue / submit a PR, thanks.
+        _labels = labels
+        _position_ids = position_ids
+        _attention_mask = attention_mask
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+        else:
+            attention_mask = attention_mask.bool()
+        if position_ids is None:
+            position_ids = torch.arange(0, input_ids.shape[1], dtype=torch.long, device=input_ids.device)
+        if labels is None:
+            labels = torch.full_like(input_ids, IGNORE_INDEX)
+        # import pdb; pdb.set_trace()
+        # remove the padding using attention_mask -- TODO: double check
+        input_ids = [cur_input_ids[cur_attention_mask.cpu()] for cur_input_ids, cur_attention_mask in zip(input_ids, attention_mask)]
+        labels = [cur_labels[cur_attention_mask] for cur_labels, cur_attention_mask in zip(labels, attention_mask)]
+
+        new_input_embeds = []
+        new_labels = []
+        cur_image_idx = 0
+        for batch_idx, cur_input_ids in enumerate(input_ids):
+            num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum()
+            if num_images == 0:
+                cur_image_features = image_features[cur_image_idx]
+                cur_input_embeds_1 = self.get_model().embed_tokens(cur_input_ids)
+                cur_input_embeds = torch.cat([cur_input_embeds_1, cur_image_features[0:0]], dim=0)
+                new_input_embeds.append(cur_input_embeds)
+                new_labels.append(labels[batch_idx])
+                cur_image_idx += 1
+                continue
+
+            image_token_indices = [-1] + torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist() + [cur_input_ids.shape[0]]
+            cur_input_ids_noim = []
+            cur_labels = labels[batch_idx]
+            cur_labels_noim = []
+            for i in range(len(image_token_indices) - 1):
+                cur_input_ids_noim.append(cur_input_ids[image_token_indices[i]+1:image_token_indices[i+1]])
+                cur_labels_noim.append(cur_labels[image_token_indices[i]+1:image_token_indices[i+1]])
+            split_sizes = [x.shape[0] for x in cur_labels_noim]
+            index = torch.cat(cur_input_ids_noim)
+            if getattr(self.get_model(), 'use_embed_tokens2', False):
+                if (index >= 32000).any():
+                    token_mask = index < 32000
+                    cur_input_embeds = torch.zeros(index.shape[0],4096).cuda().to(self.get_model().embed_tokens.weight.dtype)
+                    cur_input_embeds_llama = self.get_model().embed_tokens(index[token_mask])
+                    cur_input_embeds_add = self.get_model().embed_tokens2(index[~token_mask]-32000)
+                    cur_input_embeds[token_mask,:] = cur_input_embeds_llama
+                    cur_input_embeds[~token_mask,:] = cur_input_embeds_add
+                else:
+                    cur_input_embeds = self.get_model().embed_tokens(index)
+            else:
+                cur_input_embeds = self.get_model().embed_tokens(index)
+            cur_input_embeds_no_im = torch.split(cur_input_embeds, split_sizes, dim=0)
+            
+            cur_new_input_embeds = []
+            cur_new_labels = []
+
+            for i in range(num_images + 1):
+                cur_new_input_embeds.append(cur_input_embeds_no_im[i])
+                cur_new_labels.append(cur_labels_noim[i])
+                if i < num_images:
+                    cur_image_features = image_features[cur_image_idx]
+                    cur_image_idx += 1
+                    cur_new_input_embeds.append(cur_image_features)
+                    cur_new_labels.append(torch.full((cur_image_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
+            
+            cur_new_input_embeds = torch.cat(cur_new_input_embeds)
+            cur_new_labels = torch.cat(cur_new_labels)
+
+            new_input_embeds.append(cur_new_input_embeds)
+            new_labels.append(cur_new_labels)
+
+        # Combine them
+        max_len = max(x.shape[0] for x in new_input_embeds)
+        batch_size = len(new_input_embeds)
+
+        new_input_embeds_padded = []
+        new_labels_padded = torch.full((batch_size, max_len), IGNORE_INDEX, dtype=new_labels[0].dtype, device=new_labels[0].device)
+        attention_mask = torch.zeros((batch_size, max_len), dtype=attention_mask.dtype, device=attention_mask.device)
+        position_ids = torch.zeros((batch_size, max_len), dtype=position_ids.dtype, device=position_ids.device)
+
+        for i, (cur_new_embed, cur_new_labels) in enumerate(zip(new_input_embeds, new_labels)):
+            cur_len = cur_new_embed.shape[0]
+
+            #padding
+            new_input_embeds_padded.append(torch.cat((
+                cur_new_embed,
+                torch.zeros((max_len - cur_len, cur_new_embed.shape[1]), dtype=cur_new_embed.dtype, device=cur_new_embed.device)
+            ), dim=0))
+            if cur_len > 0:
+                new_labels_padded[i, :cur_len] = cur_new_labels
+                attention_mask[i, :cur_len] = True
+                position_ids[i, :cur_len] = torch.arange(0, cur_len, dtype=position_ids.dtype, device=position_ids.device)
+
+        new_input_embeds = torch.stack(new_input_embeds_padded, dim=0)
+
+        if _labels is None:
+            new_labels = None
+        else:
+            new_labels = new_labels_padded
+
+        if _attention_mask is None:
+            attention_mask = None
+        else:
+            attention_mask = attention_mask.to(dtype=_attention_mask.dtype)
+
+        if _position_ids is None:
+            position_ids = None
+
+        return None, position_ids, attention_mask, past_key_values, new_input_embeds, new_labels
+
+    # def prepare_inputs_labels_for_multimodal_traj(
+    #     self, input_ids, position_ids, attention_mask, past_key_values, labels, 
+    #     image_features, points, trajectory_features, ego_features, image_sizes,
+    #     training: bool = False,
+    # ):
+    #     if training:
+    #         return self.prepare_inputs_labels_for_multimodal_traj_train(input_ids, position_ids, attention_mask, past_key_values, labels, image_features, points, trajectory_features, ego_features, image_sizes)
+    #     else:
+    #         return self.prepare_inputs_labels_for_multimodal_traj_test(input_ids, position_ids, attention_mask, past_key_values, labels, image_features, points, trajectory_features, ego_features, image_sizes)
+
+    def prepare_inputs_labels_for_multimodal_traj(
+        self, input_ids, position_ids, attention_mask, past_key_values, labels, 
+        image_features, points, trajectory_features, ego_features, image_sizes, return_img_idx = False,
+    ):
+
+        if (image_features is None and trajectory_features is None and ego_features is None) or input_ids.shape[1] == 1:
+            if return_img_idx:
+                return input_ids, position_ids, attention_mask, past_key_values, None, labels, []
+            else:
+                return input_ids, position_ids, attention_mask, past_key_values, None, labels
+
+        if ego_features is not None:
+            ego_features = ego_features.reshape(-1, 1, self.hidden_size).to(dtype=self.dtype)
+
+        if image_features is not None:
+            image_features = image_features.reshape(image_features.shape[0], -1, self.hidden_size).to(dtype=self.dtype)
+        if trajectory_features is not None:
+            if trajectory_features.ndim == 3: # 这里的意思就是trajectory_features是2,6,4096
+                trajectory_features = trajectory_features.reshape(trajectory_features.shape[0], -1, self.hidden_size).to(dtype=self.dtype) # 2,6,4096 -> 2,6,4096
+            elif trajectory_features.ndim == 4: # 这里的意思就是trajectory_features是2,6,6,4096
+                B, num_trajs, num_points, _ = trajectory_features.shape
+                trajectory_features = trajectory_features.reshape(B * num_trajs, num_points, self.hidden_size).to(dtype=self.dtype) 
+        if points is not None:
+            points = points.reshape(-1, 1, self.hidden_size).to(dtype=self.dtype) # 2,6,4096 -> 12,1,4096 其实没问题，这里就是按照顺序放的
+            # points = points.reshape(points.shape[0], -1, self.hidden_size).to(dtype=self.dtype) # 2,6,4096 -> 2,6,4096
+
+        # Save original values
+        _labels = labels
+        _position_ids = position_ids
+        _attention_mask = attention_mask
+
+        # Initialize attention_mask and position_ids if they are None
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+        else:
+            attention_mask = attention_mask.bool()
+        if position_ids is None:
+            position_ids = torch.arange(0, input_ids.shape[1], dtype=torch.long, device=input_ids.device)
+        if labels is None:
+            labels = torch.full_like(input_ids, IGNORE_INDEX)
+
+        # Remove padding using attention_mask
+        input_ids = [cur_input_ids[cur_attention_mask.cpu()] for cur_input_ids, cur_attention_mask in zip(input_ids, attention_mask)]
+        labels = [cur_labels[cur_attention_mask] for cur_labels, cur_attention_mask in zip(labels, attention_mask)]
+
+        new_input_embeds = []
+        new_labels = []
+        img_indices = [] if return_img_idx else None  # 存储image features的位置信息: [(batch_idx, start_pos, end_pos), ...]
+        cur_image_idx = 0 # 这里的参数是所有batch共享的，所以其实要将batch维度与后边的N放在一起
+        cur_traj_idx = 0
+        cur_point_idx = 0
+        cur_ego_idx = 0
+
+        for batch_idx, cur_input_ids in enumerate(input_ids):
+            num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum().item()
+            num_trajs = (cur_input_ids == TRAJ_TOKEN_INDEX).sum().item()
+            num_points = (cur_input_ids == POINT_TOKEN_INDEX).sum().item()
+            num_egos = (cur_input_ids == EGO_TOKEN_INDEX).sum().item()
+
+            if num_images == 0 and num_trajs == 0 and num_points == 0 and num_egos == 0:
+                cur_input_embeds = self.get_model().embed_tokens(cur_input_ids)
+                new_input_embeds.append(cur_input_embeds)
+                new_labels.append(labels[batch_idx])
+                continue
+
+            token_indices = [-1] + torch.where(
+                (cur_input_ids == IMAGE_TOKEN_INDEX) | 
+                (cur_input_ids == TRAJ_TOKEN_INDEX) | 
+                (cur_input_ids == POINT_TOKEN_INDEX) |
+                (cur_input_ids == EGO_TOKEN_INDEX)
+            )[0].tolist() + [cur_input_ids.shape[0]] # 这里是将所有特殊token选出来，同时在list的首尾添加了-1和T，与下边的算法很契合
+            cur_input_ids_no_special = []
+            cur_labels_no_special = []
+            for i in range(len(token_indices) - 1):
+                cur_input_ids_no_special.append(cur_input_ids[token_indices[i]+1:token_indices[i+1]]) # 很好的设计哎
+                cur_labels_no_special.append(labels[batch_idx][token_indices[i]+1:token_indices[i+1]])
+            split_sizes = [x.shape[0] for x in cur_labels_no_special]
+            cur_input_embeds = self.get_model().embed_tokens(torch.cat(cur_input_ids_no_special)) # 177,4096 origin input ids 184 special 7
+            cur_input_embeds_no_special = torch.split(cur_input_embeds, split_sizes, dim=0)
+            
+            cur_new_input_embeds = []
+            cur_new_labels = []
+            cur_pos = 0  # 跟踪当前batch中的位置
+
+            special_tokens = torch.where(
+                (cur_input_ids == IMAGE_TOKEN_INDEX) | 
+                (cur_input_ids == TRAJ_TOKEN_INDEX) | 
+                (cur_input_ids == POINT_TOKEN_INDEX) |
+                (cur_input_ids == EGO_TOKEN_INDEX)
+            )[0].tolist() # 其实可以直接复用上边的token indices
+            special_types = [] # ['image', 'trajectory', 'trajectory', 'trajectory', 'trajectory', 'trajectory', 'trajectory']
+            for idx in special_tokens:
+                if cur_input_ids[idx] == IMAGE_TOKEN_INDEX:
+                    special_types.append('image')
+                elif cur_input_ids[idx] == TRAJ_TOKEN_INDEX:
+                    special_types.append('trajectory')
+                elif cur_input_ids[idx] == POINT_TOKEN_INDEX:
+                    special_types.append('point')
+                else:
+                    special_types.append('ego')
+
+            for i in range(len(cur_input_embeds_no_special) + len(special_types)): # 8 + 7 合理的7个分割获取8段普通嵌入
+                embed_idx = i // 2 if num_images > 0 and i % 2 == 1 else i
+                if i < len(cur_input_embeds_no_special): # 感觉其实这里的算法每次都会遍历，是不是其实可以直接按照对应token的位置直接放进去，但这里的速度倒是也不重要
+                    cur_new_input_embeds.append(cur_input_embeds_no_special[i])
+                    cur_new_labels.append(cur_labels_no_special[i])
+                    cur_pos += cur_input_embeds_no_special[i].shape[0]
+                if i < len(special_types):
+                    if special_types[i] == 'image' and image_features is not None:
+                        try:
+                            img_feat_len = image_features[cur_image_idx].shape[0]
+                            if return_img_idx:
+                                # 记录该image feature在当前batch中的位置
+                                img_indices.append((batch_idx, cur_pos, cur_pos + img_feat_len))
+                            cur_new_input_embeds.append(image_features[cur_image_idx])
+                        except:
+                            import pdb; pdb.set_trace()
+                            
+                        cur_new_labels.append(torch.full((image_features[cur_image_idx].shape[0],), IGNORE_INDEX, device=labels[batch_idx].device, dtype=labels[batch_idx].dtype))
+                        cur_pos += img_feat_len
+                        cur_image_idx += 1
+                    elif special_types[i] == 'trajectory' and trajectory_features is not None:
+                        cur_new_input_embeds.append(trajectory_features[cur_traj_idx]) # 6,4096 <- 12,6,4096
+                        cur_new_labels.append(torch.full((trajectory_features[cur_traj_idx].shape[0],), IGNORE_INDEX, device=labels[batch_idx].device, dtype=labels[batch_idx].dtype))
+                        cur_pos += trajectory_features[cur_traj_idx].shape[0]
+                        cur_traj_idx += 1
+                    elif special_types[i] == 'point' and points is not None:
+                        cur_new_input_embeds.append(points[cur_point_idx])
+                        cur_new_labels.append(torch.full((points[cur_point_idx].shape[0],), IGNORE_INDEX, device=labels[batch_idx].device, dtype=labels[batch_idx].dtype))
+                        cur_pos += points[cur_point_idx].shape[0]
+                        cur_point_idx += 1
+                    elif special_types[i] == 'ego' and ego_features is not None:
+                        cur_new_input_embeds.append(ego_features[cur_ego_idx])
+                        cur_new_labels.append(torch.full((ego_features[cur_ego_idx].shape[0],), IGNORE_INDEX, 
+                                                       device=labels[batch_idx].device, dtype=labels[batch_idx].dtype))
+                        cur_pos += ego_features[cur_ego_idx].shape[0]
+                        cur_ego_idx += 1
+
+            cur_new_input_embeds = torch.cat(cur_new_input_embeds)
+            cur_new_labels = torch.cat(cur_new_labels)
+
+            new_input_embeds.append(cur_new_input_embeds)
+            new_labels.append(cur_new_labels)
+
+        # Combine them
+        max_len = max(x.shape[0] for x in new_input_embeds)
+        batch_size = len(new_input_embeds)
+
+        new_input_embeds_padded = []
+        new_labels_padded = torch.full((batch_size, max_len), IGNORE_INDEX, dtype=new_labels[0].dtype, device=new_labels[0].device)
+        attention_mask = torch.zeros((batch_size, max_len), dtype=attention_mask.dtype, device=attention_mask.device)
+        position_ids = torch.zeros((batch_size, max_len), dtype=position_ids.dtype, device=position_ids.device)
+
+        for i, (cur_new_embed, cur_new_labels) in enumerate(zip(new_input_embeds, new_labels)):
+            cur_len = cur_new_embed.shape[0]
+
+            # Padding
+            new_input_embeds_padded.append(torch.cat((
+                cur_new_embed,
+                torch.zeros((max_len - cur_len, cur_new_embed.shape[1]), dtype=cur_new_embed.dtype, device=cur_new_embed.device)
+            ), dim=0))
+            if cur_len > 0:
+                new_labels_padded[i, :cur_len] = cur_new_labels
+                attention_mask[i, :cur_len] = True
+                position_ids[i, :cur_len] = torch.arange(0, cur_len, dtype=position_ids.dtype, device=position_ids.device)
+
+        new_input_embeds = torch.stack(new_input_embeds_padded, dim=0)
+
+        if _labels is None:
+            new_labels = None
+        else:
+            new_labels = new_labels_padded
+
+        if _attention_mask is None:
+            attention_mask = None
+        else:
+            attention_mask = attention_mask.to(dtype=_attention_mask.dtype)
+
+        if _position_ids is None:
+            position_ids = None
+
+        if return_img_idx:
+            return None, position_ids, attention_mask, past_key_values, new_input_embeds, new_labels, img_indices
+        else:
+            return None, position_ids, attention_mask, past_key_values, new_input_embeds, new_labels, None
+
