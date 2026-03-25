@@ -27,7 +27,7 @@
 ---
 
 ## 🔥 News
-- **[2026-03]** Training/evaluation scripts are released !
+- **[2026-03]** Training and evaluation scripts for ColaVLA are released ! We also open-source the code for [[CVPR2025] SOLVE: Synergy of Language-Vision and End-to-End Networks for Autonomous Driving](https://openaccess.thecvf.com/content/CVPR2025/papers/Chen_SOLVE_Synergy_of_Language-Vision_and_End-to-End_Networks_for_Autonomous_Driving_CVPR_2025_paper.pdf), along with the corresponding [configs](https://github.com/pqh22/ColaVLA/blob/main/projects/configs/solve_vlm_seq_384_cot_rag5_loade6qformere2e0320_noqa_headlr20_e10_cotspeed.py) and [models](https://github.com/pqh22/ColaVLA/blob/main/projects/mmdet3d_plugin/models/detectors/petr3d_image_seq_e2e_cot.py).
 - **[2026-02]** Our paper was accept by CVPR2026 ! 🥳 
 - **[2025-12]** We release the [paper](https://arxiv.org/pdf/2512.22939) and the [project page](https://pqh22.github.io/projects/ColaVLA/index.html) for **ColaVLA**.
 
