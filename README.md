@@ -86,7 +86,7 @@ Please see the paper for full tables, metrics, and ablations.
   <img src="assets/visualization.png" alt="Visualization" width="100%">
 </div>
 
-Qualitative examples show robust planning under complex multi-agent interactions and safety-critical scenarios.
+Qualitative examples show robust multi-scale trajectory planning under complex multi-agent interactions and safety-critical scenarios.
 
 ---
 
