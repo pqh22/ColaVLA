@@ -57,7 +57,7 @@ ColaVLA addresses these issues by **transferring reasoning from text to a compac
 <a id="getting-started"></a>
 ## 📚 Getting Started
 1. [**Environment Setup**](./docs/setup.md)
-2. [**Train&Inference**](./doc/train_infer.md)
+2. [**Train&Inference**](./docs/train_infer.md)
 
 ---
 
