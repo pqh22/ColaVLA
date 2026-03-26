@@ -7,10 +7,10 @@ import cv2
 import copy
 import matplotlib.pyplot as plt
 try:
-    # 尝试相对导入（当作为包的一部分时）
+    # Try relative import (when used as part of a package)
     from .map_api import NuScenesMap
 except ImportError:
-    # 回退到绝对导入（当直接运行脚本时）
+    # Fallback to absolute import (when running the script directly)
     from map_api import NuScenesMap
 from skimage.draw import polygon
 import math
@@ -258,7 +258,7 @@ class PlanningMetric():
     def evaluate_single_coll(self, traj, segmentation, input_gt=None, gt_traj=None, index=None):
         '''
         traj: torch.Tensor (n_future, 2)
-            自车IMU系为轨迹参考系
+            The ego IMU frame is used as the trajectory reference frame.
 
                 0------->
                 |        x
@@ -337,7 +337,7 @@ class PlanningMetric():
         ):
         '''
         trajs: torch.Tensor (B, n_future, 2)
-        自车IMU系为轨迹参考系
+        The ego IMU frame is used as the trajectory reference frame.
 
                 0------->
                 |        x

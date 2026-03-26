@@ -167,7 +167,7 @@ def main(args):
     key_infos = pickle.load(open(osp.join(args.base_path, anno_path), 'rb'))
     preds = dict()
     
-    # 初始化分类正确率统计
+    # Initialize classification accuracy statistics
     classification_stats = {
         'total_samples': 0,
         'correct_predictions': 0,
@@ -184,16 +184,16 @@ def main(args):
                 pred_data = pickle.load(f).squeeze()
                 preds[data['token']] = pred_data
 
-        # 检查并加载分类正确率数据（如果启用了分类评估）
+        # Check and load classification accuracy data (if classification evaluation is enabled)
         if args.eval_classification:
-            # 根据模型保存路径，分类结果保存在 vla_results 目录下
-            # 尝试多个可能的路径位置
+            # Based on the model save path, classification results are stored in vla_results
+            # Try multiple possible path locations
             possible_paths = [
-                # 直接在pred_path目录下
+                # Directly under pred_path
                 os.path.join(pred_path, data['token'] + '_classify_acc.txt'),
-                # 在pred_path的上级目录的vla_results下
+                # Under vla_results in the parent directory of pred_path
                 os.path.join(os.path.dirname(pred_path.rstrip('/')), 'vla_results', data['token'] + '_classify_acc.txt'),
-                # 在pred_path同级的vla_results目录下  
+                # Under the sibling vla_results directory of pred_path  
                 os.path.join(os.path.dirname(pred_path.rstrip('/')) if pred_path.rstrip('/') else '.', 'vla_results', data['token'] + '_classify_acc.txt'),
             ]
             
@@ -247,7 +247,7 @@ def main(args):
         thread.join()
     pbar.close()    
 
-    # 计算平均指标
+    # Compute average metrics
     samples = metric_dict['samples']
     mean_plan_obj_box_col = sum([metric_dict[f'plan_obj_box_col_{i}s'] for i in range(1,4)]) / (3 * samples)
     mean_plan_boundary = sum([metric_dict[f'plan_boundary_{i}s'] for i in range(1,4)]) / (3 * samples)
@@ -257,7 +257,7 @@ def main(args):
     print(f"mean_plan_boundary: {mean_plan_boundary}")
     print(f"mean_l2: {mean_l2}")
 
-    # 输出分类正确率结果
+    # Print classification accuracy results
     if args.eval_classification:
         if classification_stats['available'] and classification_stats['total_samples'] > 0:
             classification_accuracy = classification_stats['correct_predictions'] / classification_stats['total_samples']
