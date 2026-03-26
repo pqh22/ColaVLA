@@ -85,10 +85,10 @@ async def infer(data: InferenceInputs) -> InferenceOutputs:
     to produce trajectory predictions and auxiliary outputs.
     """
     try:
-        # 打印data的全部内容
+        # printdata
         print(f"Debug: data: {data}")
 
-        # 预处理API输入数据，转换为ColaVLA内部格式
+        # preprocessAPIdata ColaVLA
         colavla_input = _preprocess_api_input(data)
 
         print(f"Debug: colavla_input: {colavla_input}")
@@ -97,13 +97,13 @@ async def infer(data: InferenceInputs) -> InferenceOutputs:
         colavla_output = colavla_runner.forward_inference(colavla_input)
 
         # Convert output to API format
-        # 确保轨迹格式正确
+        # ensure
         trajectory_list = colavla_output.trajectory.tolist()
         print(f"Debug: trajectory shape: {colavla_output.trajectory.shape}")
         print(f"Debug: trajectory type: {type(trajectory_list)}")
         print(f"Debug: trajectory content: {trajectory_list}")
 
-        # 验证轨迹格式
+        # validate
         if not isinstance(trajectory_list, list) or len(trajectory_list) == 0:
             raise ValueError(f"Invalid trajectory format: {trajectory_list}")
 
@@ -162,7 +162,7 @@ def _preprocess_api_input(raw: InferenceInputs) -> ColaVLAInferenceInput:
     # Decode images in nuScenes camera order
     # imgs = []
     # for cam in NUSCENES_CAM_ORDER:
-    #     b64 = raw.images[cam]  # 使用属性访问，不是字典索引
+    # b64 = raw.images[cam] # use attribute access dictionary
     #     buf = base64.b64decode(b64)
     #     # Try torch.load first (handles zip-formatted torch tensor payloads)
     #     arr = None
@@ -192,26 +192,26 @@ def _preprocess_api_input(raw: InferenceInputs) -> ColaVLAInferenceInput:
     # imgs = np.stack(imgs, axis=0)
     imgs = _bytestr_to_numpy([raw.images[c] for c in NUSCENES_CAM_ORDER])
 
-    # # 检查形状与数据类型 这里就已经都是灰色的图像了，所以应该还是前边rendering node的问题
+    # # checkshapedata image rendering node
     # import os
-    # print("Shape:", imgs.shape)       # 预期 (6, 900, 1600, 3)
-    # print("Dtype:", imgs.dtype)       # 预期 uint8
+    # print("Shape:", imgs.shape) # (6, 900, 1600, 3)
+    # print("Dtype:", imgs.dtype) # uint8
     # assert imgs.ndim == 4 and imgs.shape[-1] == 3, "Unexpected image shape"
     # assert imgs.dtype == np.uint8, "Unexpected dtype"
 
-    # # 保存路径
+    # # savepath
     # save_dir = "/nfs/dataset-ofs-voyager-research/pqh/ColaVLA_private/img_closeloop"
     # os.makedirs(save_dir, exist_ok=True)
 
-    # # 保存每张图像
+    # # saveimage
     # for i, img in enumerate(imgs):
     #     img_path = os.path.join(save_dir, f"cam_{i}.png")
     #     Image.fromarray(img).save(img_path)
     #     print(f"Saved: {img_path}")
 
     # Ego and sensor poses
-    ego2world = np.array(raw.ego2world, dtype=np.float32)  # 使用属性访问
-    lidar2ego = np.array(raw.calibration.lidar2ego, dtype=np.float32)  # 使用属性访问
+    ego2world = np.array(raw.ego2world, dtype=np.float32)  # use attribute access
+    lidar2ego = np.array(raw.calibration.lidar2ego, dtype=np.float32)  # use attribute access
     lidar2world = ego2world @ lidar2ego
 
     # Per-camera intrinsics/extrinsics and lidar2img
@@ -221,10 +221,10 @@ def _preprocess_api_input(raw: InferenceInputs) -> ColaVLAInferenceInput:
     for cam in NUSCENES_CAM_ORDER:
         K = np.array(
             raw.calibration.camera2image[cam], dtype=np.float32
-        )  # 使用属性访问
+        )  # use attribute access
         cam2ego = np.array(
             raw.calibration.camera2ego[cam], dtype=np.float32
-        )  # 使用属性访问
+        )  # use attribute access
         intrinsics.append(K)
         extrinsics.append(cam2ego)
         ego2cam = np.linalg.inv(cam2ego)
@@ -238,9 +238,9 @@ def _preprocess_api_input(raw: InferenceInputs) -> ColaVLAInferenceInput:
     lidar2img = np.stack(lidar2imgs, axis=0)
 
     # CAN bus, time, command
-    can_bus = np.array(raw.canbus, dtype=np.float32)  # 使用属性访问
-    timestamp_s = float(raw.timestamp) / 1e6  # 使用属性访问
-    command = int(raw.command)  # 使用属性访问
+    can_bus = np.array(raw.canbus, dtype=np.float32)  # use attribute access
+    timestamp_s = float(raw.timestamp) / 1e6  # use attribute access
+    command = int(raw.command)  # use attribute access
 
     return ColaVLAInferenceInput(
         imgs=imgs,

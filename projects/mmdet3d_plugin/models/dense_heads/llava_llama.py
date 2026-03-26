@@ -21,10 +21,19 @@ import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
 import os
 
-from transformers import AutoConfig, AutoModelForCausalLM, \
-                         LlamaConfig, LlamaModel, LlamaForCausalLM
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    LlamaConfig,
+    LlamaModel,
+    LlamaForCausalLM,
+)
 from transformers.models.llama.modeling_llama import LLAMA_INPUTS_DOCSTRING
-from transformers.modeling_outputs import CausalLMOutputWithPast, BaseModelOutputWithPast
+from transformers.modeling_outputs import (
+    CausalLMOutputWithPast,
+    BaseModelOutputWithPast,
+)
+
 # from transformers.utils import add_start_docstrings_to_model_forward
 from .llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
 import logging
@@ -32,15 +41,19 @@ from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
 
 logger = logging.getLogger(__name__)
 
-# 尝试导入Flash Attention
+# Flash Attention
 FLASH_ATTN_AVAILABLE = False
 try:
     from flash_attn import flash_attn_func
+
     FLASH_ATTN_AVAILABLE = True
     logger.info("Flash Attention is available and can be used with FLASHUSE=1")
 except ImportError:
-    logger.warning("Flash Attention is not available. Install with: pip install flash-attn")
+    logger.warning(
+        "Flash Attention is not available. Install with: pip install flash-attn"
+    )
     flash_attn_func = None
+
 
 def add_start_docstrings_to_model_forward(*docstr):
     def docstring_decorator(fn):
@@ -63,6 +76,7 @@ def add_start_docstrings_to_model_forward(*docstr):
 
     return docstring_decorator
 
+
 class LlavaConfig(LlamaConfig):
     model_type = "llava_llama"
     _attn_implementation = "sdpa"
@@ -73,7 +87,7 @@ class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
 
     def __init__(self, config: LlamaConfig):
         super(LlavaLlamaModel, self).__init__(config)
-    
+
     def forward_with_flash_attention(
         self,
         inputs_embeds: torch.FloatTensor,
@@ -86,146 +100,172 @@ class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
         return_dict: bool = True,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """
-        使用Flash Attention的前向传播（仅支持简单mask场景）
-        
-        Args:
-            inputs_embeds: (B, L, D) 输入嵌入
-            position_ids: (B, L) 位置ID
-            attention_mask: (B, L) 2D padding mask，True表示有效位置
-            is_causal: 是否使用因果mask
-            use_cache: 不支持，必须为False
-            output_attentions: 不支持，必须为False
-            output_hidden_states: 是否输出所有hidden states
-            return_dict: 是否返回字典
-        
-        Returns:
-            BaseModelOutputWithPast
+        Flash Attention mask
+
+                Args:
+        inputs_embeds: (B, L, D)
+        position_ids: (B, L) positionID
+        attention_mask: (B, L) 2D padding mask Trueposition
+        is_causal: causalmask
+        use_cache: False
+        output_attentions: False
+        output_hidden_states: hidden states
+        return_dict: returndictionary
+
+                Returns:
+                    BaseModelOutputWithPast
         """
         if not FLASH_ATTN_AVAILABLE:
-            raise RuntimeError("Flash Attention is not available. Please install flash-attn.")
-        
+            raise RuntimeError(
+                "Flash Attention is not available. Please install flash-attn."
+            )
+
         if use_cache:
-            raise NotImplementedError("Flash Attention path does not support use_cache=True")
-        
+            raise NotImplementedError(
+                "Flash Attention path does not support use_cache=True"
+            )
+
         if output_attentions:
-            raise NotImplementedError("Flash Attention does not return attention weights")
-        
+            raise NotImplementedError(
+                "Flash Attention does not return attention weights"
+            )
+
         batch_size, seq_length, _ = inputs_embeds.shape
         hidden_states = inputs_embeds
-        
-        # 应用RoPE需要的cos/sin（从第一个attention层获取）
-        # Flash Attention内部会处理RoPE，但我们需要确保position_ids正确
-        
+
+        # RoPEcos/sin attentionget
+        # Flash AttentionprocessRoPE ensureposition_ids
+
         all_hidden_states = () if output_hidden_states else None
-        
-        # 处理padding mask：Flash Attention使用不同的格式
-        # attention_mask: (B, L) bool tensor, True表示有效位置
-        # Flash Attention需要知道每个样本的实际长度或使用key_padding_mask
+
+        # processpadding mask Flash Attention
+        # attention_mask: (B, L) bool tensor, Trueposition
+        # Flash Attentionkey_padding_mask
         key_padding_mask = None
         if attention_mask is not None:
-            # 将bool mask转换为Flash Attention的格式
-            # Flash Attention: True表示需要mask掉，False表示保留
-            # 我们的mask: True表示有效，False表示padding
-            # 所以需要取反
-            key_padding_mask = ~attention_mask.bool()  # (B, L), True表示padding位置
-        
-        # 遍历每一层
+            # bool maskFlash Attention
+            # Flash Attention: Truemask False
+            # mask: True Falsepadding
+            # Translated note.
+            key_padding_mask = ~attention_mask.bool()  # (B, L), Truepaddingposition
+
+        # Translated note.
         for idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
-            
-            # 获取当前层的attention和mlp模块
+
+            # getattentionmlp
             self_attn = decoder_layer.self_attn
-            
-            # === 手动实现Attention with Flash Attention ===
+
+            # === Attention with Flash Attention ===
             residual = hidden_states
             hidden_states = decoder_layer.input_layernorm(hidden_states)
-            
-            # Q, K, V投影
+
+            # Q, K, V
             bsz, q_len, _ = hidden_states.size()
             query_states = self_attn.q_proj(hidden_states)
             key_states = self_attn.k_proj(hidden_states)
             value_states = self_attn.v_proj(hidden_states)
-            
+
             # Reshape: (B, L, num_heads, head_dim)
-            query_states = query_states.view(bsz, q_len, self_attn.num_heads, self_attn.head_dim)
-            key_states = key_states.view(bsz, q_len, self_attn.num_key_value_heads, self_attn.head_dim)
-            value_states = value_states.view(bsz, q_len, self_attn.num_key_value_heads, self_attn.head_dim)
-            
-            # 应用RoPE
+            query_states = query_states.view(
+                bsz, q_len, self_attn.num_heads, self_attn.head_dim
+            )
+            key_states = key_states.view(
+                bsz, q_len, self_attn.num_key_value_heads, self_attn.head_dim
+            )
+            value_states = value_states.view(
+                bsz, q_len, self_attn.num_key_value_heads, self_attn.head_dim
+            )
+
+            # RoPE
             kv_seq_len = key_states.shape[1]
-            # 转换为(B, num_heads, L, head_dim)进行RoPE
+            # (B, num_heads, L, head_dim)RoPE
             query_states_rope = query_states.transpose(1, 2)
             key_states_rope = key_states.transpose(1, 2)
             value_states_rope = value_states.transpose(1, 2)
-            
+
             cos, sin = self_attn.rotary_emb(value_states_rope, seq_len=kv_seq_len)
-            
+
             query_states_rope, key_states_rope = apply_rotary_pos_emb(
                 query_states_rope, key_states_rope, cos, sin, position_ids
             )
-            
-            # 转回(B, L, num_heads, head_dim)
+
+            # (B, L, num_heads, head_dim)
             query_states = query_states_rope.transpose(1, 2)
             key_states = key_states_rope.transpose(1, 2)
             value_states = value_states_rope.transpose(1, 2)
-            
-            # 处理GQA：如果num_key_value_heads < num_heads，需要repeat
+
+            # processGQA num_key_value_heads < num_heads repeat
             if self_attn.num_key_value_groups > 1:
                 # repeat_kv: (B, L, num_kv_heads, head_dim) -> (B, L, num_heads, head_dim)
-                key_states = key_states.repeat_interleave(self_attn.num_key_value_groups, dim=2)
-                value_states = value_states.repeat_interleave(self_attn.num_key_value_groups, dim=2)
-            
-            # Flash Attention调用
-            # flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False, 
+                key_states = key_states.repeat_interleave(
+                    self_attn.num_key_value_groups, dim=2
+                )
+                value_states = value_states.repeat_interleave(
+                    self_attn.num_key_value_groups, dim=2
+                )
+
+            # Flash Attention
+            # flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
             #                 window_size=(-1, -1), alibi_slopes=None, deterministic=False)
-            # 输入格式：(batch_size, seqlen, nheads, headdim)
-            
+            # (batch_size, seqlen, nheads, headdim)
+
             attn_output = flash_attn_func(
                 query_states,
                 key_states,
                 value_states,
                 dropout_p=0.0,
-                softmax_scale=None,  # 默认使用1/sqrt(head_dim)
+                softmax_scale=None,  # default1/sqrt(head_dim)
                 causal=is_causal,
-                # key_padding_mask 参数在flash-attn 2.3.2中可能不直接支持
-                # 需要使用cu_seqlens或直接忽略padding（如果都是满的）
+                # key_padding_mask flash-attn 2.3.2
+                # cu_seqlenspadding
             )
-            
-            # 如果有padding mask，手动处理padding位置的输出
+
+            # padding mask processpaddingposition
             if key_padding_mask is not None:
-                # 将padding位置的输出置零
+                # paddingposition
                 attn_output = attn_output.masked_fill(
                     key_padding_mask.unsqueeze(-1).unsqueeze(-1),  # (B, L, 1, 1)
-                    0.0
+                    0.0,
                 )
-            
-            # Reshape回(B, L, hidden_size)
-            attn_output = attn_output.reshape(bsz, q_len, self_attn.num_heads * self_attn.head_dim)
-            
-            # Output投影
+
+            # Reshape(B, L, hidden_size)
+            attn_output = attn_output.reshape(
+                bsz, q_len, self_attn.num_heads * self_attn.head_dim
+            )
+
+            # Output
             attn_output = self_attn.o_proj(attn_output)
-            attn_output = torch.nan_to_num(attn_output, nan=0.0, posinf=1e5, neginf=-1e5)
-            
-            # Residual连接
+            attn_output = torch.nan_to_num(
+                attn_output, nan=0.0, posinf=1e5, neginf=-1e5
+            )
+
+            # Residual
             hidden_states = residual + attn_output
-            
-            # === MLP部分（保持不变）===
+
+            # === MLPpart ===
             residual = hidden_states
             hidden_states = decoder_layer.post_attention_layernorm(hidden_states)
             hidden_states = decoder_layer.mlp(hidden_states)
             hidden_states = residual + hidden_states
-            hidden_states = torch.nan_to_num(hidden_states, nan=0.0, posinf=1e5, neginf=-1e5)
-        
+            hidden_states = torch.nan_to_num(
+                hidden_states, nan=0.0, posinf=1e5, neginf=-1e5
+            )
+
         # Final layer norm
         hidden_states = self.norm(hidden_states)
-        
+
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
-        
+
         if not return_dict:
-            return tuple(v for v in [hidden_states, None, all_hidden_states, None] if v is not None)
-        
+            return tuple(
+                v
+                for v in [hidden_states, None, all_hidden_states, None]
+                if v is not None
+            )
+
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=None,
@@ -247,13 +287,21 @@ class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
 
-        # ----------- 原版前半段保持不变 -----------
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        # ----------- -----------
+        output_attentions = (
+            output_attentions
+            if output_attentions is not None
+            else self.config.output_attentions
+        )
         output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds")
@@ -272,56 +320,72 @@ class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
         if position_ids is None:
             device = input_ids.device if input_ids is not None else inputs_embeds.device
             position_ids = torch.arange(
-                past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
+                past_key_values_length,
+                seq_length + past_key_values_length,
+                dtype=torch.long,
+                device=device,
             ).unsqueeze(0)
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
-        # ----------- 这里开始改动：统一生成 `decoder_attention_mask` -----------
+        # ----------- `decoder_attention_mask` -----------
         if attention_mask is None:
-            # 与原版一致：默认全 1
+            # default 1
             attention_mask = torch.ones(
-                (batch_size, seq_length_with_past), dtype=torch.bool, device=inputs_embeds.device
+                (batch_size, seq_length_with_past),
+                dtype=torch.bool,
+                device=inputs_embeds.device,
             )
 
         if attention_mask.dim() == 4:
-            # 用户传入的已扩展 4-D mask:
-            #   ― 如果是 bool：True 表示可见 -> 转成 0 / -inf additive mask
-            #   ― 如果已经是 float/half：默认视为 additive mask，直接使用
+            # expand 4-D mask:
+            # ― bool True visible -> 0 / -inf additive mask
+            # ― float/half default additive mask
             if attention_mask.dtype == torch.bool:
                 attn_dtype = inputs_embeds.dtype
                 attention_mask = attention_mask.to(attn_dtype)
                 # True → 0.0   False → -inf
                 attention_mask = (1.0 - attention_mask) * torch.finfo(attn_dtype).min
-            # 保证 device 和 dtype
-            attention_mask = attention_mask.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype)
-            combined_attention_mask = attention_mask  # 已经是最终形状
+            # device dtype
+            attention_mask = attention_mask.to(
+                device=inputs_embeds.device, dtype=inputs_embeds.dtype
+            )
+            combined_attention_mask = attention_mask  # shape
         else:
-            # 维持原版行为（2-D bool → causal + padding mask）
+            # 2-D bool → causal + padding mask
             combined_attention_mask = self._prepare_decoder_attention_mask(
-                attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values_length
+                attention_mask,
+                (batch_size, seq_length),
+                inputs_embeds,
+                past_key_values_length,
             )
 
-        # 后续逻辑 **完全照搬** 原实现，只把 `attention_mask` 换成 `combined_attention_mask`
+        # **** `attention_mask` `combined_attention_mask`
         hidden_states = inputs_embeds
         if self.gradient_checkpointing and self.training and use_cache:
-            logger.warning_once("`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`")
+            logger.warning_once(
+                "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`"
+            )
             use_cache = False
 
         all_hidden_states = () if output_hidden_states else None
-        all_self_attns  = () if output_attentions else None
+        all_self_attns = () if output_attentions else None
         next_decoder_cache = () if use_cache else None
 
         for idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            past_key_value = past_key_values[idx] if past_key_values is not None else None
+            past_key_value = (
+                past_key_values[idx] if past_key_values is not None else None
+            )
 
             if self.gradient_checkpointing and self.training:
+
                 def custom_forward(*inputs):
                     return decoder_layer(*inputs, output_attentions, None)
+
                 layer_outputs = torch.utils.checkpoint.checkpoint(
                     custom_forward,
                     hidden_states,
@@ -340,7 +404,9 @@ class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
                 )
 
             hidden_states = layer_outputs[0]
-            hidden_states = torch.nan_to_num(hidden_states, nan=0.0, posinf=1e5, neginf=-1e5)
+            hidden_states = torch.nan_to_num(
+                hidden_states, nan=0.0, posinf=1e5, neginf=-1e5
+            )
 
             if use_cache:
                 next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
@@ -353,14 +419,19 @@ class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
 
         next_cache = next_decoder_cache if use_cache else None
         if not return_dict:
-            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
+            return tuple(
+                v
+                for v in [hidden_states, next_cache, all_hidden_states, all_self_attns]
+                if v is not None
+            )
 
         return BaseModelOutputWithPast(
-            last_hidden_state = hidden_states,
-            past_key_values   = next_cache,
-            hidden_states     = all_hidden_states,
-            attentions        = all_self_attns,
+            last_hidden_state=hidden_states,
+            past_key_values=next_cache,
+            hidden_states=all_hidden_states,
+            attentions=all_self_attns,
         )
+
 
 class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
     config_class = LlavaConfig
@@ -373,41 +444,33 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         self.pretraining_tp = config.pretraining_tp
 
         if self.config.add_dist_token:
-            number_tokens = list(range(32000,32256))
+            number_tokens = list(range(32000, 32256))
             weighted_mask = torch.ones(32256)
             self.config.vocab_size = 32256
         else:
             number_tokens = [
-                    718,
-                    448,
-                    29900,
-                    29889,
-                    29896,
-                    29906,
-                    29941,
-                    29946,
-                    29945,
-                    29953,
-                    29955,
-                    29947,
-                    29929,
-                ]  # +-0.123456789
+                718,
+                448,
+                29900,
+                29889,
+                29896,
+                29906,
+                29941,
+                29946,
+                29945,
+                29953,
+                29955,
+                29947,
+                29929,
+            ]  # +-0.123456789
             weighted_mask = torch.ones(self.config.vocab_size)
-            number_tokens += [28544, 
-                              11255, 
-                              1563, 
-                              1266, 
-                              4151, 
-                              523, 
-                              3396, 
-                              2408]
+            number_tokens += [28544, 11255, 1563, 1266, 4151, 523, 3396, 2408]
             # slow, fast, left, right, 'stra', 'ight', 'main', 'tain'
         weighted_mask[number_tokens] = 3.0
         self.register_buffer("weighted_mask", weighted_mask)
-        
+
         # Initialize weights and apply final processing
         self.post_init()
-
 
         # self.query_norm = nn.LayerNorm(self.hidden_size)
 
@@ -416,38 +479,38 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
 
     # def switch_lora_adapter(self, adapter_name: str):
     #     """
-    #     切换当前激活的LoRA adapter（双LoRA模式下使用）
-        
+    # switchLoRA adapter LoRA
+
     #     Args:
-    #         adapter_name: adapter名称，如 "lora_1" 或 "lora_2"
+    # adapter_name: adapter "lora_1" "lora_2"
     #     """
     #     if hasattr(self, 'set_adapter'):
     #         self.set_adapter(adapter_name)
     #         print(f"Switched to LoRA adapter: {adapter_name}")
     #     else:
     #         print("Warning: Model does not have multiple adapters")
-    
+
     # def enable_lora_adapters(self, adapter_names: list):
     #     """
-    #     启用多个LoRA adapters（可以同时使用两个LoRA）
-        
+    # enableLoRA adapters LoRA
+
     #     Args:
-    #         adapter_names: adapter名称列表，如 ["lora_1", "lora_2"]
+    # adapter_names: adapter ["lora_1", "lora_2"]
     #     """
     #     if hasattr(self, 'set_adapter'):
     #         self.set_adapter(adapter_names)
     #         print(f"Enabled LoRA adapters: {adapter_names}")
     #     else:
     #         print("Warning: Model does not have multiple adapters")
-    
+
     def get_active_adapters(self):
         """
-        获取当前激活的LoRA adapters
-        
-        Returns:
-            当前激活的adapter名称或列表
+        getLoRA adapters
+
+                Returns:
+        adapter
         """
-        if hasattr(self, 'active_adapters'):
+        if hasattr(self, "active_adapters"):
             return self.active_adapters
         else:
             return None
@@ -474,25 +537,24 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         if inputs_embeds is None:
             if trajectories is not None or points is not None:
                 (
-                    input_ids, 
+                    input_ids,
                     position_ids,
                     attention_mask,
                     past_key_values,
-                    inputs_embeds, # 序列长度与下列的labels长度相同
-                    labels # 新的labels序列会变长，主要是将图像特征的序列和其他特征的序列对应的部分也进行IGNORE
+                    inputs_embeds,  # labels
+                    labels,  # labels imagepartIGNORE
                 ) = self.prepare_inputs_labels_for_multimodal_traj(
                     input_ids,
-                    position_ids, # None
+                    position_ids,  # None
                     attention_mask,
                     past_key_values,
                     labels,
                     images,
                     points,
                     trajectories,
-                    ego_features, # None
+                    ego_features,  # None
                     image_sizes,
-       
-                )   
+                )
 
             else:
                 (
@@ -501,7 +563,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                     attention_mask,
                     past_key_values,
                     inputs_embeds,
-                    labels
+                    labels,
                 ) = self.prepare_inputs_labels_for_multimodal(
                     input_ids,
                     position_ids,
@@ -509,14 +571,22 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                     past_key_values,
                     labels,
                     images,
-                    image_sizes
+                    image_sizes,
                 )
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        output_attentions = (
+            output_attentions
+            if output_attentions is not None
+            else self.config.output_attentions
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
@@ -533,8 +603,13 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
 
         hidden_states = outputs[0]
         if self.pretraining_tp > 1:
-            lm_head_slices = self.lm_head.weight.split(self.vocab_size // self.pretraining_tp, dim=0)
-            logits = [F.linear(hidden_states, lm_head_slices[i]) for i in range(self.pretraining_tp)]
+            lm_head_slices = self.lm_head.weight.split(
+                self.vocab_size // self.pretraining_tp, dim=0
+            )
+            logits = [
+                F.linear(hidden_states, lm_head_slices[i])
+                for i in range(self.pretraining_tp)
+            ]
             logits = torch.cat(logits, dim=-1)
         else:
             logits = self.lm_head(hidden_states)
@@ -564,11 +639,11 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-       
-# 在 llava_llama.py 的 LlavaLlamaForCausalLM 类里添加：
+
+    # llava_llama.py LlavaLlamaForCausalLM
 
     def sanitize_tensor(self, x: torch.Tensor, eps: float = 1e-5):
-        # 复用你已有的 sanitize 逻辑，顺便提供一个小工具
+        # sanitize
         if torch.isnan(x).any():
             print("Warning: NaNs detected. Replacing with zeros.")
             x = torch.nan_to_num(x, nan=0.0)
@@ -581,13 +656,12 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             x = torch.clamp(x, min=-1e4, max=1e4)
         return x
 
-
     def forward_queries_train(
         self,
-        base_inputs_embeds: torch.Tensor,           # [B, T, D]  (文本/多模态已在此)
-        query_embeds: torch.Tensor,                 # [B, Q, D]  (可学习 queries)
-        attention_mask: torch.Tensor = None,        # [B, T] 或 [B, T+Q]，其中“第二答+padding=False”
-        position_ids: torch.LongTensor = None,      # [B, T] 或 [B, T+Q]
+        base_inputs_embeds: torch.Tensor,  # [B, T, D] (/)
+        query_embeds: torch.Tensor,  # [B, Q, D] ( queries)
+        attention_mask: torch.Tensor = None,  # [B, T] [B, T+Q] +padding=False
+        position_ids: torch.LongTensor = None,  # [B, T] [B, T+Q]
         past_key_values: list = None,
         use_cache: bool = None,
         output_attentions: bool = None,
@@ -595,116 +669,133 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         detach: bool = False,
         return_full_hidden: bool = False,
         use_text_context: bool = False,
-        text_embs_stage: str = "initial", # initial middle last
+        text_embs_stage: str = "initial",  # initial middle last
     ):
         """
-        训练版：
-        - 假定 attention_mask 已将“第二个回答 + padding”置为 False
-        - queries 仅可看到 (Q1 + A1 + Q2)，看不到第二答与 padding
-        - base 看不到 queries；base 内部保持因果
-        - 第二答与 padding 在注意力中既不能作为 key 被看见，也不能作为 query 去看别人
-        返回:
-        query_feats: [B, Q, D] 最后一层隐藏态
-        updated: dict，包含拼接后的 2D/4D 掩码与位置等
-        (可选) all_hidden_states
+        training
+        - attention_mask + padding False
+        - queries (Q1 + A1 + Q2) padding
+        - base queries base causal
+        - padding note key query
+        return:
+        query_feats: [B, Q, D]
+        updated: dict concatenate 2D/4D maskposition
+        () all_hidden_states
         """
 
-        # ---- 形状检查 ----
+        # ---- shapecheck ----
         B, T, D = base_inputs_embeds.shape
         Bq, Q, Dq = query_embeds.shape
         assert B == Bq, "Batch size mismatch."
-        assert D == Dq == self.model.config.hidden_size, \
+        assert D == Dq == self.model.config.hidden_size, (
             f"Hidden size mismatch: base={D}, query={Dq}, model={self.model.config.hidden_size}"
+        )
 
         device = base_inputs_embeds.device
         llm = self.model
         llm_param = next(llm.parameters())
-        llm_dtype  = llm_param.dtype
+        llm_dtype = llm_param.dtype
         llm_device = llm_param.device
         NEG_INF = torch.finfo(llm_dtype).min
         POS_INF = torch.finfo(llm_dtype).max
 
-        # ---- 数值清洗（与你的测试版一致）----
+        # ---- numericalsanitize ----
         base_inputs_embeds = sanitize_inputs_embeds(base_inputs_embeds)
         query_embeds = self.sanitize_tensor(query_embeds)
 
-        # ---- 拼接 ----
-        inputs_embeds = torch.cat([base_inputs_embeds, query_embeds], dim=1)  # [B, T+Q, D]
+        # ---- concatenate ----
+        inputs_embeds = torch.cat(
+            [base_inputs_embeds, query_embeds], dim=1
+        )  # [B, T+Q, D]
         L = T + Q
 
-        # ---- attention_mask 补齐到 [B, T+Q]，queries 默认有效(True) ----
+        # ---- attention_mask [B, T+Q] queries default(True) ----
         if attention_mask is None:
             attention_mask = torch.ones(B, T, dtype=torch.long, device=device)
         assert attention_mask.dim() == 2 and attention_mask.size(0) == B
         if attention_mask.size(1) == T:
             q_mask = torch.ones(B, Q, dtype=attention_mask.dtype, device=device)
-            attention_mask = torch.cat([attention_mask, q_mask], dim=1)       # [B, T+Q]
+            attention_mask = torch.cat([attention_mask, q_mask], dim=1)  # [B, T+Q]
         else:
             assert attention_mask.size(1) == L, "Unexpected attention_mask length."
 
-        # ---- position_ids 补齐到 [B, T+Q] ----
+        # ---- position_ids [B, T+Q] ----
         if position_ids is None:
-            position_ids = torch.arange(0, L, dtype=torch.long, device=device).unsqueeze(0).repeat(B, 1)
+            position_ids = (
+                torch.arange(0, L, dtype=torch.long, device=device)
+                .unsqueeze(0)
+                .repeat(B, 1)
+            )
         else:
             assert position_ids.dim() == 2 and position_ids.size(0) == B
             if position_ids.size(1) == T:
                 last_pos = position_ids[:, -1:]  # [B,1]
-                incr = torch.arange(1, Q + 1, device=device, dtype=position_ids.dtype).unsqueeze(0)  # [1,Q]
-                position_ids = torch.cat([position_ids, last_pos + incr], dim=1)                     # [B,T+Q]
+                incr = torch.arange(
+                    1, Q + 1, device=device, dtype=position_ids.dtype
+                ).unsqueeze(0)  # [1,Q]
+                position_ids = torch.cat(
+                    [position_ids, last_pos + incr], dim=1
+                )  # [B,T+Q]
             else:
                 assert position_ids.size(1) == L, "Unexpected position_ids length."
 
         L = T + Q
 
-        # ---- 1) 构造块状加性偏置（base 无因果；只禁止 base→query）----
-        # base↔base：允许（双向，不做因果）
+        # ---- 1) build base causal forbidden base→query ----
+        # base↔base bidirectional causal
         base_base = torch.zeros((T, T), device=llm_device, dtype=llm_dtype)
 
-        # base→query：禁止
-        base_to_query = torch.full((T, Q), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype)
+        # base→query forbidden
+        base_to_query = torch.full(
+            (T, Q), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype
+        )
 
-        # query→base：允许
+        # query→base
         query_to_base = torch.zeros((Q, T), device=llm_device, dtype=llm_dtype)
 
-        # query↔query：允许（双向）
-        # 若想让 query 内部因果，可改为上三角屏蔽：torch.triu(torch.ones((Q,Q), ...), diagonal=1)
+        # query↔query bidirectional
+        # query causal torch.triu(torch.ones((Q,Q), ...), diagonal=1)
         query_query = torch.zeros((Q, Q), device=llm_device, dtype=llm_dtype)
 
-        upper = torch.cat([base_base,   base_to_query], dim=1)  # [T, L]
+        upper = torch.cat([base_base, base_to_query], dim=1)  # [T, L]
         lower = torch.cat([query_to_base, query_query], dim=1)  # [Q, L]
-        attn_bias = torch.cat([upper, lower], dim=0)            # [L, L]
+        attn_bias = torch.cat([upper, lower], dim=0)  # [L, L]
 
-        # 扩展到 4D: [B, 1, L, L]（覆写用的“加性偏置”）
+        # expand 4D: [B, 1, L, L]
         attn_bias = attn_bias.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L).contiguous()
 
-        # ---- 2) 融合 2D padding mask（覆写而非累加）----
+        # ---- 2) merge 2D padding mask ----
         mask_2d_bool = attention_mask.to(device=llm_device, dtype=torch.bool)  # [B, L]
 
-        # 屏蔽列（key 不可被任何人看见）
+        # key
         attn_bias = attn_bias.masked_fill((~mask_2d_bool).view(B, 1, 1, L), NEG_INF)
 
-        # 屏蔽行（这些位置自己也不能去看别人）
+        # position
         attn_bias = attn_bias.masked_fill((~mask_2d_bool).view(B, 1, L, 1), NEG_INF)
 
-        # ---- 3) “全行被屏蔽”保险：给这类行放一个自环(对角=0，其余=NEG_INF) 以避免 softmax NaN ----
-        # 说明：当某一行全部是 NEG_INF，softmax 会出 NaN。对 padding 行放行自环即可（不影响有效行）。
-        row_all_masked = (attn_bias <= (NEG_INF * 0.5)).all(dim=-1, keepdim=True)  # [B,1,L,1]
+        # ---- 3) (=0 =NEG_INF) softmax NaN ----
+        # NEG_INF softmax NaN padding
+        row_all_masked = (attn_bias <= (NEG_INF * 0.5)).all(
+            dim=-1, keepdim=True
+        )  # [B,1,L,1]
 
-        eye = torch.eye(L, device=llm_device, dtype=llm_dtype)                     # [L,L]
-        eye = eye.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L)                      # [B,1,L,L]
+        eye = torch.eye(L, device=llm_device, dtype=llm_dtype)  # [L,L]
+        eye = eye.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L)  # [B,1,L,L]
 
-        fix_row = torch.full_like(attn_bias, NEG_INF)                               # 其他列仍为 NEG_INF
-        fix_row = torch.where(eye.bool(), torch.zeros_like(attn_bias), fix_row)     # 仅对角置 0
+        fix_row = torch.full_like(attn_bias, NEG_INF)  # NEG_INF
+        fix_row = torch.where(eye.bool(), torch.zeros_like(attn_bias), fix_row)  # 0
 
         attn_bias = torch.where(row_all_masked, fix_row, attn_bias)
-        # ---- 4) 双保险：移除 NaN / ±Inf（理论上不会出现，这里只是兜底）----
+        # ---- 4) NaN / ±Inf ----
         attn_bias = torch.nan_to_num(attn_bias, nan=0.0, posinf=POS_INF, neginf=NEG_INF)
 
-        # ---- dtype / device 对齐 ----
-        inputs_embeds = inputs_embeds.to(device=llm_device, dtype=llm_dtype).contiguous()
-        position_ids  = position_ids.to(device=llm_device, dtype=torch.long)
+        # ---- dtype / device ----
+        inputs_embeds = inputs_embeds.to(
+            device=llm_device, dtype=llm_dtype
+        ).contiguous()
+        position_ids = position_ids.to(device=llm_device, dtype=torch.long)
 
-        # ---- 过模型（使用 4D 加性掩码）----
+        # ---- 4D mask ----
         outputs = self.model.forward_support_4d(
             input_ids=None,
             inputs_embeds=inputs_embeds,
@@ -716,26 +807,32 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             return_dict=True,
         )
 
-        last_hidden = outputs.last_hidden_state           # [B, T+Q, D]
-        last_hidden = torch.nan_to_num(last_hidden, nan=0.0, posinf=POS_INF, neginf=NEG_INF)
+        last_hidden = outputs.last_hidden_state  # [B, T+Q, D]
+        last_hidden = torch.nan_to_num(
+            last_hidden, nan=0.0, posinf=POS_INF, neginf=NEG_INF
+        )
 
-        query_feats = last_hidden[:, -Q:, :]              # [B, Q, D]
+        query_feats = last_hidden[:, -Q:, :]  # [B, Q, D]
 
         if detach:
             query_feats = query_feats.detach()
 
-        # 便于后续继续用
+        # Translated note.
         updated = {
             "inputs_embeds": inputs_embeds,
-            "attention_mask_2d": attention_mask.to(llm_device, dtype=torch.long),  # [B,L]
-            "attention_mask_4d": attn_bias,                                        # [B,1,L,L]
+            "attention_mask_2d": attention_mask.to(
+                llm_device, dtype=torch.long
+            ),  # [B,L]
+            "attention_mask_4d": attn_bias,  # [B,1,L,L]
             "position_ids": position_ids,
-            "past_key_values": None,  # 训练时未启用
-            "last_hidden": last_hidden
+            "past_key_values": None,  # trainingenable
+            "last_hidden": last_hidden,
             # "hidden_states": outputs.hidden_states,
         }
         import os, ipdb
-        if os.getenv("HIDDEN_DEBUG") == "1": ipdb.set_trace()  
+
+        if os.getenv("HIDDEN_DEBUG") == "1":
+            ipdb.set_trace()
         if return_full_hidden:
             return query_feats, updated, outputs.hidden_states
         else:
@@ -743,169 +840,193 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
 
     def forward_queries_test(
         self,
-        base_inputs_embeds: torch.Tensor,          # [B, T, D] 已有的 eLLM（图像/导航/文字）
-        query_embeds: torch.Tensor,                # [B, Q, D] 外部提供的可学习 queries
-        attention_mask: Optional[torch.Tensor] = None,  # [B, T] 或 [B, T+Q]
-        position_ids: Optional[torch.LongTensor] = None, # [B, T] 或 [B, T+Q]
-        past_key_values: Optional[list] = None,     # 可选，与常规 forward 对齐
+        base_inputs_embeds: torch.Tensor,  # [B, T, D] eLLM image//
+        query_embeds: torch.Tensor,  # [B, Q, D] queries
+        attention_mask: Optional[torch.Tensor] = None,  # [B, T] [B, T+Q]
+        position_ids: Optional[torch.LongTensor] = None,  # [B, T] [B, T+Q]
+        past_key_values: Optional[list] = None,  # forward
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        detach: bool = False,                       # 如果你只想拿特征不反传，置 True
-        return_full_hidden: bool = False,           # 如需调试整段 hidden，可打开
+        detach: bool = False,  # True
+        return_full_hidden: bool = False,  # hidden
         use_text_context: bool = False,
-        text_embs_stage: str = "initial", # initial middle last
+        text_embs_stage: str = "initial",  # initial middle last
     ):
         """
-        将外部 learnable queries 直接拼到序列末尾，跑一遍 LLM，
-        并返回这些 query 位置对应的隐藏特征，用于类外 MLP 生成轨迹。
-        不计算 logits、不参与语言 loss。
+        learnable queries LLM
+        return query position MLP
+        logits loss
 
-        返回:
-          query_feats: [B, Q, D]  —— 对应每个 query token 的最后层 hidden
-          updated: dict 包含 concat 后的 inputs_embeds/attention_mask/position_ids（如你想继续生成）
-          (可选) all_hidden_states: 仅 return_full_hidden=True 时返回
+        return:
+        query_feats: [B, Q, D] query token hidden
+        updated: dict concat inputs_embeds/attention_mask/position_ids
+        () all_hidden_states: return_full_hidden=True return
         """
         # import os, ipdb
         # if os.getenv("DEBUG") == "1": ipdb.set_trace()
-        # 基本检查
+        # check
         B, T, D = base_inputs_embeds.shape
         Bq, Q, Dq = query_embeds.shape
-        assert B == Bq, "Batch size mismatch between base_inputs_embeds and query_embeds"
-        assert D == Dq == self.model.config.hidden_size, \
+        assert B == Bq, (
+            "Batch size mismatch between base_inputs_embeds and query_embeds"
+        )
+        assert D == Dq == self.model.config.hidden_size, (
             f"Hidden size mismatch: got D={D}, query D={Dq}, model={self.model.config.hidden_size}"
+        )
 
         device = base_inputs_embeds.device
 
-        # 处理数值稳定性（可选）
-        base_inputs_embeds = sanitize_inputs_embeds(base_inputs_embeds) # 也出现了NaN，已解决
-        query_embeds = self.sanitize_tensor(query_embeds) # 出现了NaN，已解决
+        # processnumerical
+        base_inputs_embeds = sanitize_inputs_embeds(base_inputs_embeds)  # NaN
+        query_embeds = self.sanitize_tensor(query_embeds)  # NaN
 
-        # 拼接 embeds
-        inputs_embeds = torch.cat([base_inputs_embeds, query_embeds], dim=1)  # [B, T+Q, D]
+        # concatenate embeds
+        inputs_embeds = torch.cat(
+            [base_inputs_embeds, query_embeds], dim=1
+        )  # [B, T+Q, D]
         # inputs_embeds = self.query_norm(inputs_embeds.float()).to(dtype=base_inputs_embeds.dtype)
-        
 
         # attention mask
-        if attention_mask is None: # None
+        if attention_mask is None:  # None
             attention_mask = torch.ones(B, T, dtype=torch.long, device=device)
         if attention_mask.size(1) != T:
-            # 若外部已带上 Q 段，也允许；否则我们自己补
-            assert attention_mask.size(1) in (T, T+Q), "Unexpected attention_mask length"
+            # Q
+            assert attention_mask.size(1) in (T, T + Q), (
+                "Unexpected attention_mask length"
+            )
         if attention_mask.size(1) == T:
             q_mask = torch.ones(B, Q, dtype=attention_mask.dtype, device=device)
-            attention_mask = torch.cat([attention_mask, q_mask], dim=1)       # [B, T+Q]
+            attention_mask = torch.cat([attention_mask, q_mask], dim=1)  # [B, T+Q]
 
         # position ids
         if position_ids is None:
-            # 连续位置编码：0..T+Q-1
-            position_ids = torch.arange(0, T + Q, dtype=torch.long, device=device).unsqueeze(0).repeat(B, 1)
+            # position 0..T+Q-1
+            position_ids = (
+                torch.arange(0, T + Q, dtype=torch.long, device=device)
+                .unsqueeze(0)
+                .repeat(B, 1)
+            )
         else:
-            assert position_ids.size(1) in (T, T+Q), "Unexpected position_ids length"
+            assert position_ids.size(1) in (T, T + Q), "Unexpected position_ids length"
             if position_ids.size(1) == T:
-                # 延续已有位置，再为 Q 段补上增量位置
+                # position Q position
                 last_pos = position_ids[:, -1:]  # [B,1]
-                incr = torch.arange(1, Q + 1, device=device, dtype=position_ids.dtype).unsqueeze(0)  # [1,Q]
+                incr = torch.arange(
+                    1, Q + 1, device=device, dtype=position_ids.dtype
+                ).unsqueeze(0)  # [1,Q]
                 pos_q = last_pos + incr
                 position_ids = torch.cat([position_ids, pos_q], dim=1)  # [B, T+Q]
 
-
         llm = self.model
         llm_param = next(llm.parameters())
-        llm_dtype  = llm_param.dtype
+        llm_dtype = llm_param.dtype
         llm_device = llm_param.device
         NEG_INF = torch.finfo(llm_dtype).min
         POS_INF = torch.finfo(llm_dtype).max
 
         L = T + Q
 
-        # ---- 1) 构造块状加性偏置（base 无因果；只禁止 base→query）----
-        # base↔base：允许（双向，不做因果）
+        # ---- 1) build base causal forbidden base→query ----
+        # base↔base bidirectional causal
         base_base = torch.zeros((T, T), device=llm_device, dtype=llm_dtype)
 
-        # base→query：禁止
-        base_to_query = torch.full((T, Q), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype)
+        # base→query forbidden
+        base_to_query = torch.full(
+            (T, Q), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype
+        )
 
-        # query→base：允许
+        # query→base
         query_to_base = torch.zeros((Q, T), device=llm_device, dtype=llm_dtype)
 
-        # query↔query：允许（双向）
-        # 若想让 query 内部因果，可改为上三角屏蔽：torch.triu(torch.ones((Q,Q), ...), diagonal=1)
+        # query↔query bidirectional
+        # query causal torch.triu(torch.ones((Q,Q), ...), diagonal=1)
         query_query = torch.zeros((Q, Q), device=llm_device, dtype=llm_dtype)
 
-        upper = torch.cat([base_base,   base_to_query], dim=1)  # [T, L]
+        upper = torch.cat([base_base, base_to_query], dim=1)  # [T, L]
         lower = torch.cat([query_to_base, query_query], dim=1)  # [Q, L]
-        attn_bias = torch.cat([upper, lower], dim=0)            # [L, L]
+        attn_bias = torch.cat([upper, lower], dim=0)  # [L, L]
 
-        # 扩展到 4D: [B, 1, L, L]（覆写用的“加性偏置”）
+        # expand 4D: [B, 1, L, L]
         attn_bias = attn_bias.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L).contiguous()
 
-        # ---- 2) 融合 2D padding mask（覆写而非累加）----
+        # ---- 2) merge 2D padding mask ----
         mask_2d_bool = attention_mask.to(device=llm_device, dtype=torch.bool)  # [B, L]
 
-        # 屏蔽列（key 不可被任何人看见）
+        # key
         attn_bias = attn_bias.masked_fill((~mask_2d_bool).view(B, 1, 1, L), NEG_INF)
 
-        # 屏蔽行（这些位置自己也不能去看别人）
+        # position
         attn_bias = attn_bias.masked_fill((~mask_2d_bool).view(B, 1, L, 1), NEG_INF)
 
-        # ---- 3) “全行被屏蔽”保险：给这类行放一个自环(对角=0，其余=NEG_INF) 以避免 softmax NaN ----
-        # 说明：当某一行全部是 NEG_INF，softmax 会出 NaN。对 padding 行放行自环即可（不影响有效行）。
-        row_all_masked = (attn_bias <= (NEG_INF * 0.5)).all(dim=-1, keepdim=True)  # [B,1,L,1]
+        # ---- 3) (=0 =NEG_INF) softmax NaN ----
+        # NEG_INF softmax NaN padding
+        row_all_masked = (attn_bias <= (NEG_INF * 0.5)).all(
+            dim=-1, keepdim=True
+        )  # [B,1,L,1]
 
-        eye = torch.eye(L, device=llm_device, dtype=llm_dtype)                     # [L,L]
-        eye = eye.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L)                      # [B,1,L,L]
+        eye = torch.eye(L, device=llm_device, dtype=llm_dtype)  # [L,L]
+        eye = eye.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L)  # [B,1,L,L]
 
-        fix_row = torch.full_like(attn_bias, NEG_INF)                               # 其他列仍为 NEG_INF
-        fix_row = torch.where(eye.bool(), torch.zeros_like(attn_bias), fix_row)     # 仅对角置 0
+        fix_row = torch.full_like(attn_bias, NEG_INF)  # NEG_INF
+        fix_row = torch.where(eye.bool(), torch.zeros_like(attn_bias), fix_row)  # 0
 
         attn_bias = torch.where(row_all_masked, fix_row, attn_bias)
 
-        # ---- 4) 双保险：移除 NaN / ±Inf（理论上不会出现，这里只是兜底）----
+        # ---- 4) NaN / ±Inf ----
         attn_bias = torch.nan_to_num(attn_bias, nan=0.0, posinf=POS_INF, neginf=NEG_INF)
 
+        # note sanitize dtype float32 LLM dtype
+        inputs_embeds = inputs_embeds.to(
+            device=llm_device, dtype=llm_dtype
+        ).contiguous()
 
-        # 注意：sanitize 可能把 dtype 变成 float32，这里统一转回 LLM dtype
-        inputs_embeds = inputs_embeds.to(device=llm_device, dtype=llm_dtype).contiguous()
-        
-        # query_embeds 在上面已经拼进去了，如果你是先拼再转，这里无需再次处理；
-        # 若你是先对 query_embeds 做了独立处理，确保它也是 llm_dtype：
+        # query_embeds process
+        # query_embeds process ensure llm_dtype
         # query_embeds = query_embeds.to(device=llm_device, dtype=llm_dtype)
 
-        # 把 padding（key 侧列）并入 4D 掩码
+        # padding key 4D mask
         if attention_mask is None or attention_mask.size(1) != L:
-            # 若你已有 [B,T]，上一步已补成 [B,L]
+            # [B,T] [B,L]
             pass
-        key_pad = (1 - attention_mask).to(dtype=llm_dtype, device=llm_device)  # 1 表示要 -inf 的列
+        key_pad = (1 - attention_mask).to(dtype=llm_dtype, device=llm_device)  # 1 -inf
         attn_bias = attn_bias + key_pad.view(B, 1, 1, L) * NEG_INF
 
-        # mask & pos 的 dtype 规范：mask 用 long/bool，pos 用 long
+        # mask & pos dtype mask long/bool pos long
         if attention_mask is None:
-            attention_mask = torch.ones(inputs_embeds.size()[:2], device=llm_device, dtype=torch.long)
+            attention_mask = torch.ones(
+                inputs_embeds.size()[:2], device=llm_device, dtype=torch.long
+            )
         else:
             attention_mask = attention_mask.to(device=llm_device, dtype=torch.long)
 
         if position_ids is None:
             B, TQ, _ = inputs_embeds.shape
-            position_ids = torch.arange(0, TQ, device=llm_device, dtype=torch.long).unsqueeze(0).expand(B, -1)
+            position_ids = (
+                torch.arange(0, TQ, device=llm_device, dtype=torch.long)
+                .unsqueeze(0)
+                .expand(B, -1)
+            )
         else:
             position_ids = position_ids.to(device=llm_device, dtype=torch.long)
 
-        # --- 过模型：传 4D 浮点掩码，覆盖默认 ---
+        # --- 4D mask default ---
         outputs = self.model.forward_support_4d(
             input_ids=None,
             inputs_embeds=inputs_embeds.to(device=llm_device, dtype=llm_dtype),
-            attention_mask=attn_bias,              # 关键：传 4D 加性掩码
+            attention_mask=attn_bias,  # 4D mask
             position_ids=position_ids.to(llm_device),
-            past_key_values=None,                  # 建议这一步不要用 pkv（见下）
-            use_cache=False,                       # 不 cache，保证一次性双向
+            past_key_values=None,  # pkv
+            use_cache=False,  # cache bidirectional
             output_hidden_states=True,
             return_dict=True,
         )
 
-        last_hidden = outputs.last_hidden_state                  # [B, T+Q, D]
-        last_hidden = torch.nan_to_num(last_hidden, nan=0.0, posinf=POS_INF, neginf=NEG_INF)
-        query_feats = last_hidden[:, -Q:, :]                     # [B, Q, D]
+        last_hidden = outputs.last_hidden_state  # [B, T+Q, D]
+        last_hidden = torch.nan_to_num(
+            last_hidden, nan=0.0, posinf=POS_INF, neginf=NEG_INF
+        )
+        query_feats = last_hidden[:, -Q:, :]  # [B, Q, D]
 
         if detach:
             query_feats = query_feats.detach()
@@ -915,97 +1036,131 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             "attention_mask": attention_mask,
             "position_ids": position_ids,
             "past_key_values": outputs.past_key_values,
-            "last_hidden": last_hidden
+            "last_hidden": last_hidden,
         }
         import os, ipdb
-        if os.getenv("HIDDEN_DEBUG") == "1": ipdb.set_trace()  
+
+        if os.getenv("HIDDEN_DEBUG") == "1":
+            ipdb.set_trace()
         if return_full_hidden:
             return query_feats, updated, outputs.hidden_states
         else:
             return query_feats, updated
-        
+
     def forward_queries(
         self,
-        base_inputs_embeds: torch.Tensor,          # [B, T, D]
-        query_embeds: torch.Tensor,                # [B, Q, D] 外部提供的可学习 queries
-        attention_mask: Optional[torch.Tensor] = None,  # [B, T] 或 [B, T+Q]
-        position_ids: Optional[torch.LongTensor] = None, # [B, T] 或 [B, T+Q]
-        past_key_values: Optional[list] = None,     # 可选，与常规 forward 对齐
+        base_inputs_embeds: torch.Tensor,  # [B, T, D]
+        query_embeds: torch.Tensor,  # [B, Q, D] queries
+        attention_mask: Optional[torch.Tensor] = None,  # [B, T] [B, T+Q]
+        position_ids: Optional[torch.LongTensor] = None,  # [B, T] [B, T+Q]
+        past_key_values: Optional[list] = None,  # forward
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        detach: bool = False,                       # 如果你只想拿特征不反传，置 True
-        return_full_hidden: bool = False,           # 如需调试整段 hidden，可打开
+        detach: bool = False,  # True
+        return_full_hidden: bool = False,  # hidden
         training: bool = False,
         use_text_context: bool = False,
-        text_embs_stage: str = "initial", # initial middle last
+        text_embs_stage: str = "initial",  # initial middle last
     ):
         if training:
             return self.forward_queries_train(
-                base_inputs_embeds, query_embeds, attention_mask, position_ids, past_key_values, use_cache, output_attentions, output_hidden_states, detach, return_full_hidden, use_text_context, text_embs_stage)
+                base_inputs_embeds,
+                query_embeds,
+                attention_mask,
+                position_ids,
+                past_key_values,
+                use_cache,
+                output_attentions,
+                output_hidden_states,
+                detach,
+                return_full_hidden,
+                use_text_context,
+                text_embs_stage,
+            )
         else:
             return self.forward_queries_test(
-                base_inputs_embeds, query_embeds, attention_mask, position_ids, past_key_values, use_cache, output_attentions, output_hidden_states, detach, return_full_hidden, use_text_context, text_embs_stage)
-    
+                base_inputs_embeds,
+                query_embeds,
+                attention_mask,
+                position_ids,
+                past_key_values,
+                use_cache,
+                output_attentions,
+                output_hidden_states,
+                detach,
+                return_full_hidden,
+                use_text_context,
+                text_embs_stage,
+            )
+
     def forward_queries_stage_inference(
         self,
-        base_context: torch.Tensor,               # (B, Q_context, D)  视觉+导航上下文
-        traj_embeds_slots: torch.Tensor,          # (B, T, D)  完整的T个槽位（只有可见位置有值）
-        prev_stage_query_outs: Optional[torch.Tensor],  # (B, K_all_prev, D)  所有历史stages的query outputs（累积）
-        curr_stage_query: torch.Tensor,           # (B, n_curr, D)  当前stage的queries
-        last_stage_len: int = 0,                  # 最后一个stage的长度（用于掩码，确保只看Stage i-1）
-        traj_valid_mask: Optional[torch.Tensor] = None,  # (B, T) bool mask，标记哪些traj位置有效
-        attention_mask: Optional[torch.Tensor] = None,  # (B, Q_context) base的padding mask
+        base_context: torch.Tensor,  # (B, Q_context, D) +
+        traj_embeds_slots: torch.Tensor,  # (B, T, D) T visibleposition
+        prev_stage_query_outs: Optional[
+            torch.Tensor
+        ],  # (B, K_all_prev, D) stagesquery outputs
+        curr_stage_query: torch.Tensor,  # (B, n_curr, D) stagequeries
+        last_stage_len: int = 0,  # stage mask ensureStage i-1
+        traj_valid_mask: Optional[torch.Tensor] = None,  # (B, T) bool mask trajposition
+        attention_mask: Optional[
+            torch.Tensor
+        ] = None,  # (B, Q_context) basepadding mask
         position_ids: Optional[torch.LongTensor] = None,
     ):
         """
-        推理时单个stage的forward，完全对齐训练时的掩码逻辑和位置编码。
-        
-        序列结构（对应训练时的 [base, gt_traj_embeds, all_prev_stages_queries, curr_stage_queries]）：
-            [base_context, traj_embeds_slots, prev_stage_query_outs(所有历史), curr_stage_query]
-            [Q_context,    T,                 K_all_prev,                      n_curr]
-        
-        关键改进：
-            - 传入**所有历史 stages** 的 query outputs（不只是 Stage i-1），确保位置编码与训练时对齐
-            - 通过 last_stage_len 参数和掩码设计，确保 curr 只能看到 Stage i-1（最后一个 stage）
-            - 这样既保证了位置编码对齐，又保证了信息流对齐
-        
-        掩码逻辑（完全对齐训练）：
-            1. base ↔ base: 双向可见
-            2. traj_slots ↔ traj_slots: 只有对角线可见（自环，避免不同时间步泄漏）
-            3. base → (traj + prev + curr): 全部禁止
-            4. traj → base: 可见
-            5. traj → (prev + curr): 禁止
-            6. prev → base: 可见
-            7. prev → traj: 可见（历史已经看过）
-            8. prev ↔ prev: 双向可见（但curr只能看到最后 last_stage_len 个，即 Stage i-1）
-            9. prev → curr: 禁止（不能看未来）
-            10. curr → base: 可见
-            11. curr → traj: 可见（当前stage需要的信息）
-            12. curr → prev: 只能看到最后 last_stage_len 个（Stage i-1），与训练时对齐
-            13. curr ↔ curr: 双向可见
-        
-        Args:
-            base_context: 视觉上下文 (B, Q_context, D)
-            traj_embeds_slots: 完整T个嵌入槽位，只有当前可见位置有值 (B, T, D)
-            prev_stage_query_outs: 所有历史stages的query outputs (B, K_all_prev, D)，首次为None
-            curr_stage_query: 当前stage的queries (B, n_curr, D)
-            last_stage_len: 最后一个stage（Stage i-1）的长度，用于掩码限制curr只看Stage i-1
-            traj_valid_mask: 标记traj_embeds_slots中哪些位置有效 (B, T)，True表示有效
-            attention_mask: base的padding mask (B, Q_context)
-        
-        Returns:
-            curr_query_out: (B, n_curr, D)
+        inferencestageforward trainingmaskposition
+
+        training [base, gt_traj_embeds, all_prev_stages_queries, curr_stage_queries]
+        [base_context, traj_embeds_slots, prev_stage_query_outs(), curr_stage_query]
+                    [Q_context,    T,                 K_all_prev,                      n_curr]
+
+        Translated note.
+        - ** stages** query outputs Stage i-1 ensurepositiontraining
+        - last_stage_len mask ensure curr Stage i-1 stage
+        - position
+
+        mask training
+        1. base ↔ base: bidirectionalvisible
+        2. traj_slots ↔ traj_slots: visible
+        3. base → (traj + prev + curr): forbidden
+        4. traj → base: visible
+        5. traj → (prev + curr): forbidden
+        6. prev → base: visible
+        7. prev → traj: visible
+        8. prev ↔ prev: bidirectionalvisible curr last_stage_len Stage i-1
+        9. prev → curr: forbidden
+        10. curr → base: visible
+        11. curr → traj: visible stage
+        12. curr → prev: last_stage_len Stage i-1 training
+        13. curr ↔ curr: bidirectionalvisible
+
+                Args:
+        base_context: (B, Q_context, D)
+        traj_embeds_slots: T visibleposition (B, T, D)
+        prev_stage_query_outs: stagesquery outputs (B, K_all_prev, D) None
+        curr_stage_query: stagequeries (B, n_curr, D)
+        last_stage_len: stage Stage i-1 maskcurrStage i-1
+        traj_valid_mask: traj_embeds_slotsposition (B, T) True
+        attention_mask: basepadding mask (B, Q_context)
+
+                Returns:
+                    curr_query_out: (B, n_curr, D)
         """
         B, Q_context, D = base_context.shape
         _, T, _ = traj_embeds_slots.shape
         _, n_curr, _ = curr_stage_query.shape
-        K_prev = prev_stage_query_outs.shape[1] if prev_stage_query_outs is not None else 0
-        
-        # 如果没有提供 traj_valid_mask，默认所有位置有效
+        K_prev = (
+            prev_stage_query_outs.shape[1] if prev_stage_query_outs is not None else 0
+        )
+
+        # traj_valid_mask defaultposition
         if traj_valid_mask is None:
-            traj_valid_mask = torch.ones(B, T, dtype=torch.bool, device=base_context.device)
-        
+            traj_valid_mask = torch.ones(
+                B, T, dtype=torch.bool, device=base_context.device
+            )
+
         device = base_context.device
         llm = self.model
         llm_param = next(llm.parameters())
@@ -1013,128 +1168,172 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         llm_device = llm_param.device
         NEG_INF = torch.finfo(llm_dtype).min
         POS_INF = torch.finfo(llm_dtype).max
-        
-        # ---- 数值清洗 ----
+
+        # ---- numericalsanitize ----
         base_context = sanitize_inputs_embeds(base_context)
         traj_embeds_slots = self.sanitize_tensor(traj_embeds_slots)
         curr_stage_query = self.sanitize_tensor(curr_stage_query)
         if prev_stage_query_outs is not None:
             prev_stage_query_outs = self.sanitize_tensor(prev_stage_query_outs)
-        
-        # ---- 拼接 embeds ----
+
+        # ---- concatenate embeds ----
         if prev_stage_query_outs is not None:
-            inputs_embeds = torch.cat([base_context, traj_embeds_slots, prev_stage_query_outs, curr_stage_query], dim=1)
+            inputs_embeds = torch.cat(
+                [
+                    base_context,
+                    traj_embeds_slots,
+                    prev_stage_query_outs,
+                    curr_stage_query,
+                ],
+                dim=1,
+            )
         else:
-            inputs_embeds = torch.cat([base_context, traj_embeds_slots, curr_stage_query], dim=1)
+            inputs_embeds = torch.cat(
+                [base_context, traj_embeds_slots, curr_stage_query], dim=1
+            )
         L = Q_context + T + K_prev + n_curr
-        
-        # ---- 构造掩码（完全对齐训练时的逻辑）----
+
+        # ---- buildmask training ----
         attn_mask_2d = torch.zeros((L, L), device=llm_device, dtype=llm_dtype)
-        
-        # 1. traj_slots ↔ traj_slots: 只有对角线可见
+
+        # 1. traj_slots ↔ traj_slots: visible
         traj_start = Q_context
         traj_end = Q_context + T
-        traj_block = torch.full((T, T), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype)
+        traj_block = torch.full(
+            (T, T), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype
+        )
         diag_idx = torch.arange(T, device=llm_device)
         traj_block[diag_idx, diag_idx] = 0.0
         attn_mask_2d[traj_start:traj_end, traj_start:traj_end] = traj_block
-        
-        # 2. base → 所有后面的（traj + prev + curr）: 禁止
+
+        # 2. base → traj + prev + curr : forbidden
         attn_mask_2d[:Q_context, Q_context:] = NEG_INF
-        
-        # 3. traj → prev: 禁止
+
+        # 3. traj → prev: forbidden
         if K_prev > 0:
             prev_start = Q_context + T
             prev_end = Q_context + T + K_prev
             attn_mask_2d[traj_start:traj_end, prev_start:prev_end] = NEG_INF
-        
-        # 4. traj → curr: 禁止
+
+        # 4. traj → curr: forbidden
         curr_start = Q_context + T + K_prev
         attn_mask_2d[traj_start:traj_end, curr_start:] = NEG_INF
-        
-        # 5. prev → curr: 禁止（如果有prev）
+
+        # 5. prev → curr: forbidden prev
         if K_prev > 0:
             attn_mask_2d[prev_start:prev_end, curr_start:] = NEG_INF
-        
-        # 6. curr → prev: 只能看到最后 last_stage_len 个（Stage i-1），与训练时对齐
+
+        # 6. curr → prev: last_stage_len Stage i-1 training
         if K_prev > 0 and last_stage_len > 0 and last_stage_len < K_prev:
-            # 禁止 curr 看到 prev 的前 (K_prev - last_stage_len) 个位置
-            attn_mask_2d[curr_start:, prev_start:prev_start+(K_prev-last_stage_len)] = NEG_INF
-        
-        # 其余默认可见（已初始化为0）
-        
-        # ---- 扩展到 4D 并融合 padding mask ----
-        attn_bias = attn_mask_2d.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L).contiguous()
-        
-        # 处理 base 的 padding mask
+            # forbidden curr prev (K_prev - last_stage_len) position
+            attn_mask_2d[
+                curr_start:, prev_start : prev_start + (K_prev - last_stage_len)
+            ] = NEG_INF
+
+        # defaultvisible 0
+
+        # ---- expand 4D merge padding mask ----
+        attn_bias = (
+            attn_mask_2d.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L).contiguous()
+        )
+
+        # process base padding mask
         if attention_mask is None:
             attention_mask = torch.ones(B, Q_context, dtype=torch.bool, device=device)
         else:
             attention_mask = attention_mask.to(device=device, dtype=torch.bool)
-        
-        # traj: 使用传入的 traj_valid_mask（只有有值的位置才有效）
-        # prev, curr: 默认全部有效
-        traj_mask = traj_valid_mask.to(device=device, dtype=torch.bool)  # 使用传入的 mask
-        prev_mask = torch.ones(B, K_prev, dtype=torch.bool, device=device) if K_prev > 0 else None
+
+        # traj: traj_valid_mask position
+        # prev, curr: default
+        traj_mask = traj_valid_mask.to(device=device, dtype=torch.bool)  # mask
+        prev_mask = (
+            torch.ones(B, K_prev, dtype=torch.bool, device=device)
+            if K_prev > 0
+            else None
+        )
         curr_mask = torch.ones(B, n_curr, dtype=torch.bool, device=device)
-        
+
         if prev_mask is not None:
-            mask_2d_bool = torch.cat([attention_mask, traj_mask, prev_mask, curr_mask], dim=1)
+            mask_2d_bool = torch.cat(
+                [attention_mask, traj_mask, prev_mask, curr_mask], dim=1
+            )
         else:
             mask_2d_bool = torch.cat([attention_mask, traj_mask, curr_mask], dim=1)
-        
-        # 屏蔽列（key不可见）和行（query不能看）
+
+        # keyvisible query
         attn_bias = attn_bias.masked_fill((~mask_2d_bool).view(B, 1, 1, L), NEG_INF)
         attn_bias = attn_bias.masked_fill((~mask_2d_bool).view(B, 1, L, 1), NEG_INF)
-        
-        # "全行被屏蔽"保险（避免softmax NaN）
+
+        # "" softmax NaN
         row_all_masked = (attn_bias <= (NEG_INF * 0.5)).all(dim=-1, keepdim=True)
-        eye = torch.eye(L, device=llm_device, dtype=llm_dtype).unsqueeze(0).unsqueeze(1).expand(B, 1, L, L)
+        eye = (
+            torch.eye(L, device=llm_device, dtype=llm_dtype)
+            .unsqueeze(0)
+            .unsqueeze(1)
+            .expand(B, 1, L, L)
+        )
         fix_row = torch.full_like(attn_bias, NEG_INF)
         fix_row = torch.where(eye.bool(), torch.zeros_like(attn_bias), fix_row)
         attn_bias = torch.where(row_all_masked, fix_row, attn_bias)
-        
-        # 数值清洗
+
+        # numericalsanitize
         attn_bias = torch.nan_to_num(attn_bias, nan=0.0, posinf=POS_INF, neginf=NEG_INF)
-        
-        # ---- position_ids（关键：必须与训练时的绝对位置对齐）----
-        # 训练时的位置：[0...Q_context-1, Q_context...Q_context+T-1, Q_context+T...Q_context+T+K_prev-1, Q_context+T+K_prev...]
-        # 为了对齐，我们需要使用与训练时相同的绝对位置编码
+
+        # ---- position_ids trainingposition ----
+        # trainingposition [0...Q_context-1, Q_context...Q_context+T-1, Q_context+T...Q_context+T+K_prev-1, Q_context+T+K_prev...]
+        # trainingposition
         if position_ids is None:
-            # 生成与训练时一致的绝对位置编码
+            # trainingposition
             # base: 0...Q_context-1
-            # traj: Q_context...Q_context+T-1  
+            # traj: Q_context...Q_context+T-1
             # prev: Q_context+T...Q_context+T+K_prev-1
             # curr: Q_context+T+K_prev...Q_context+T+K_prev+n_curr-1
-            position_ids = torch.arange(0, L, dtype=torch.long, device=device).unsqueeze(0).repeat(B, 1)
+            position_ids = (
+                torch.arange(0, L, dtype=torch.long, device=device)
+                .unsqueeze(0)
+                .repeat(B, 1)
+            )
         else:
-            # 如果外部提供了 base 的 position_ids，需要正确扩展
+            # base position_ids expand
             if position_ids.size(1) == Q_context:
-                # 按照训练时的逻辑扩展：连续递增
+                # trainingexpand
                 last_pos = position_ids[:, -1:]
-                # traj 部分：last_pos + 1 到 last_pos + T
-                incr_traj = torch.arange(1, T + 1, device=device, dtype=position_ids.dtype).unsqueeze(0)
+                # traj part last_pos + 1 last_pos + T
+                incr_traj = torch.arange(
+                    1, T + 1, device=device, dtype=position_ids.dtype
+                ).unsqueeze(0)
                 pos_traj = last_pos + incr_traj
-                
-                # prev 部分：last_pos + T + 1 到 last_pos + T + K_prev
-                incr_prev = torch.arange(T + 1, T + K_prev + 1, device=device, dtype=position_ids.dtype).unsqueeze(0)
+
+                # prev part last_pos + T + 1 last_pos + T + K_prev
+                incr_prev = torch.arange(
+                    T + 1, T + K_prev + 1, device=device, dtype=position_ids.dtype
+                ).unsqueeze(0)
                 pos_prev = last_pos + incr_prev if K_prev > 0 else None
-                
-                # curr 部分：last_pos + T + K_prev + 1 到 last_pos + T + K_prev + n_curr
-                incr_curr = torch.arange(T + K_prev + 1, T + K_prev + n_curr + 1, device=device, dtype=position_ids.dtype).unsqueeze(0)
+
+                # curr part last_pos + T + K_prev + 1 last_pos + T + K_prev + n_curr
+                incr_curr = torch.arange(
+                    T + K_prev + 1,
+                    T + K_prev + n_curr + 1,
+                    device=device,
+                    dtype=position_ids.dtype,
+                ).unsqueeze(0)
                 pos_curr = last_pos + incr_curr
-                
-                # 拼接
+
+                # concatenate
                 if pos_prev is not None:
-                    position_ids = torch.cat([position_ids, pos_traj, pos_prev, pos_curr], dim=1)
+                    position_ids = torch.cat(
+                        [position_ids, pos_traj, pos_prev, pos_curr], dim=1
+                    )
                 else:
                     position_ids = torch.cat([position_ids, pos_traj, pos_curr], dim=1)
-        
-        # ---- dtype/device 对齐 ----
-        inputs_embeds = inputs_embeds.to(device=llm_device, dtype=llm_dtype).contiguous()
+
+        # ---- dtype/device ----
+        inputs_embeds = inputs_embeds.to(
+            device=llm_device, dtype=llm_dtype
+        ).contiguous()
         position_ids = position_ids.to(device=llm_device, dtype=torch.long)
-        
-        # ---- 过模型（使用4D掩码）----
+
+        # ---- 4Dmask ----
         outputs = self.model.forward_support_4d(
             input_ids=None,
             inputs_embeds=inputs_embeds,
@@ -1145,48 +1344,50 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             output_hidden_states=False,
             return_dict=True,
         )
-        
+
         last_hidden = outputs.last_hidden_state  # (B, L, D)
-        last_hidden = torch.nan_to_num(last_hidden, nan=0.0, posinf=POS_INF, neginf=NEG_INF)
-        
-        # 提取 curr_stage_query 对应的输出
+        last_hidden = torch.nan_to_num(
+            last_hidden, nan=0.0, posinf=POS_INF, neginf=NEG_INF
+        )
+
+        # curr_stage_query
         curr_query_out = last_hidden[:, -n_curr:, :]  # (B, n_curr, D)
-        
+
         return curr_query_out
 
     def forward_queries_parallel(
         self,
-        base_inputs_embeds: torch.Tensor,           # [B, T, D]  视觉上下文
-        query_embeds: torch.Tensor,                 # [B, Q, D]  所有时间步的 queries
-        stage_indices: List[List[int]],             # 多尺度索引，如 [[5], [2,4], [1,3,5], [0,1,2,3,4,5]]
-        gt_traj_embeds: Optional[torch.Tensor] = None,   # (B, T, d_in)
-        attention_mask: Optional[torch.Tensor] = None,  # [B, T] base 的 padding mask
+        base_inputs_embeds: torch.Tensor,  # [B, T, D]
+        query_embeds: torch.Tensor,  # [B, Q, D] queries
+        stage_indices: List[List[int]],  # [[5], [2,4], [1,3,5], [0,1,2,3,4,5]]
+        gt_traj_embeds: Optional[torch.Tensor] = None,  # (B, T, d_in)
+        attention_mask: Optional[torch.Tensor] = None,  # [B, T] base padding mask
         position_ids: Optional[torch.LongTensor] = None,
         training: bool = False,
         detach: bool = False,
         return_full_hidden: bool = False,
     ):
         """
-        并行解码多尺度轨迹点，通过设计因果掩码确保尺度间的自回归依赖。
-        
-        核心思想（参考 VAR）：
-        - 为每个时间步分配尺度级别（stage level）
-        - 构造掩码：时间步 i 只能看到尺度级别 <= 自己的时间步 + 所有 base
-        - 一次性并行解码所有点，避免 for 循环
-        
-        Args:
-            base_inputs_embeds: (B, T, D) 视觉+导航上下文
-            query_embeds: (B, Q, D) 所有时间步的 query（已加时间位置编码+条件化调制）
-            stage_indices: 多尺度索引列表，如 [[5], [2,4], [1,3,5], [0,1,2,3,4,5]]
-            gt_traj_embeds: (B, T, d_in) 真实轨迹点嵌入
-            attention_mask: (B, T) base 的 padding mask
-            training: 是否训练模式
-        
-        Returns:
-            query_feats: (B, Q, D) 每个时间步的输出特征
-            updated: dict 包含拼接后的 inputs_embeds/attention_mask 等
+        causalmaskensure
+
+        core VAR
+        - stage level
+        - buildmask i <= + base
+        - for
+
+                Args:
+        base_inputs_embeds: (B, T, D) +
+        query_embeds: (B, Q, D) query position+
+        stage_indices: [[5], [2,4], [1,3,5], [0,1,2,3,4,5]]
+        gt_traj_embeds: (B, T, d_in)
+        attention_mask: (B, T) base padding mask
+        training: training
+
+                Returns:
+        query_feats: (B, Q, D)
+        updated: dict concatenate inputs_embeds/attention_mask
         """
-        # ---- 形状检查 ----
+        # ---- shapecheck ----
         B, Q_context, D = base_inputs_embeds.shape
         Bq, T, Dq = query_embeds.shape
         assert B == Bq and D == Dq == self.model.config.hidden_size
@@ -1199,12 +1400,14 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         llm_device = llm_param.device
         NEG_INF = torch.finfo(llm_dtype).min
         POS_INF = torch.finfo(llm_dtype).max
-        
-        # ---- 数值清洗 ----
+
+        # ---- numericalsanitize ----
         base_inputs_embeds = sanitize_inputs_embeds(base_inputs_embeds)
         query_embeds = self.sanitize_tensor(query_embeds)
         import os, ipdb
-        if os.getenv("DEBUG") == "1": ipdb.set_trace() 
+
+        if os.getenv("DEBUG") == "1":
+            ipdb.set_trace()
         # tgt reconstruction
         stage_tgt_list = []
         stage_len_list = []
@@ -1215,139 +1418,172 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         assert final_tgt.shape[1] == sum(stage_len_list)
         Q_final = final_tgt.shape[1]
 
-        # index list: 记录每个 stage 在 inputs_embeds 中的起始位置
+        # index list: stage inputs_embeds position
         final_index_list = []
         for i in range(len(stage_len_list)):
             final_index_list.append(Q_context + T + sum(stage_len_list[:i]))
-        
-        # 验证索引列表的正确性
-        assert len(final_index_list) == len(stage_indices), \
-            f"final_index_list 长度 {len(final_index_list)} 应等于 stage_indices 长度 {len(stage_indices)}"
-        
-        # 验证每个 stage 的起始位置
+
+        # validate
+        assert len(final_index_list) == len(stage_indices), (
+            f"final_index_list length {len(final_index_list)} must equal stage_indices length {len(stage_indices)}"
+        )
+
+        # validate stage position
         for i in range(len(stage_indices)):
             expected_start = Q_context + T + sum(stage_len_list[:i])
-            assert final_index_list[i] == expected_start, \
-                f"Stage {i} 的起始位置 {final_index_list[i]} 应为 {expected_start}"
+            assert final_index_list[i] == expected_start, (
+                f"Stage {i} start position {final_index_list[i]} must be {expected_start}"
+            )
 
-        # ---- 2. 拼接 embeds ----
-        inputs_embeds = torch.cat([base_inputs_embeds, gt_traj_embeds, final_tgt], dim=1)  # [B, Q_context+T+Q_final, D]
+        # ---- 2. concatenate embeds ----
+        inputs_embeds = torch.cat(
+            [base_inputs_embeds, gt_traj_embeds, final_tgt], dim=1
+        )  # [B, Q_context+T+Q_final, D]
         L = Q_context + T + Q_final
-        
-        # ---- 3. 构造多尺度自回归掩码 ----
-        # 初始化掩码矩阵 [L, L]，默认全部可见（0）
+
+        # ---- 3. buildmask ----
+        # mask [L, L] defaultvisible 0
         attn_mask_2d = torch.zeros((L, L), device=llm_device, dtype=llm_dtype)
-        
-        # 3.1 base 和 GT 部分：双向可见（已经是0，无需修改）
+
+        # 3.1 base GT part bidirectionalvisible 0
         # base ↔ base: 0
-        # GT ↔ GT: 只能自环，因为相互看会泄漏不同尺度的信息
-        gt_block = torch.full((T, T), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype)
+        # GT ↔ GT:
+        gt_block = torch.full(
+            (T, T), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype
+        )
         diag_idx = torch.arange(T, device=llm_device)
         gt_block[diag_idx, diag_idx] = 0.0
-        attn_mask_2d[Q_context:Q_context+T, Q_context:Q_context+T] = gt_block
+        attn_mask_2d[Q_context : Q_context + T, Q_context : Q_context + T] = gt_block
 
-        # base ↔ GT: 不能看
-        # 3.2 base → tgt: 禁止（base 不应看到未来的 query）
+        # base ↔ GT:
+        # 3.2 base → tgt: forbidden base query
         attn_mask_2d[:Q_context, Q_context:] = NEG_INF
-        
-        # 3.3 GT → tgt: 禁止（GT 不应看到未来的 query）
-        attn_mask_2d[Q_context:Q_context+T, Q_context+T:] = NEG_INF
-        
-        # 3.4 tgt → base: 允许（已经是0）
-        
-        # 3.5 tgt → GT: 根据 stage 规则设置
-        # 默认先全部禁止，然后根据每个 stage 的规则打开对应的 GT
+
+        # 3.3 GT → tgt: forbidden GT query
+        attn_mask_2d[Q_context : Q_context + T, Q_context + T :] = NEG_INF
+
+        # 3.4 tgt → base: 0
+
+        # 3.5 tgt → GT: stage
+        # defaultforbidden stage GT
         tgt_start = Q_context + T
-        tgt_to_gt_mask = torch.full((Q_final, T), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype)
-        
-        # 对于每个 stage，允许其看到上一个 stage 产生的 GT 点
+        tgt_to_gt_mask = torch.full(
+            (Q_final, T), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype
+        )
+
+        # stage stage GT
         tgt_offset = 0
         for stage_id in range(len(stage_indices)):
-            n_queries = stage_len_list[stage_id]  # 当前 stage 的 query 数量
-            
-            # Stage i 可以看到 stage_indices[i-1] 对应的 GT
+            n_queries = stage_len_list[stage_id]  # stage query
+
+            # Stage i stage_indices[i-1] GT
             if stage_id > 0:
                 prev_stage_gt_indices = stage_indices[stage_id - 1]
-                # 将这些 GT 位置设为可见
+                # GT positionvisible
                 for gt_idx in prev_stage_gt_indices:
-                    tgt_to_gt_mask[tgt_offset:tgt_offset+n_queries, gt_idx] = 0.0 # 没问题 torch.Size([21, 6])
-            # else: Stage 0 不看任何 GT（保持 NEG_INF）
-            
+                    tgt_to_gt_mask[tgt_offset : tgt_offset + n_queries, gt_idx] = (
+                        0.0  # torch.Size([21, 6])
+                    )
+            # else: Stage 0 GT NEG_INF
+
             tgt_offset += n_queries
-        
-        # 将 tgt → GT 的掩码填入主掩码矩阵
-        attn_mask_2d[tgt_start:, Q_context:Q_context+T] = tgt_to_gt_mask
-        
-        # 3.6 tgt ↔ tgt: 因果掩码（Stage i 只能看到 Stage i-1 和 Stage i，不看更早的）
-        # 这样设计的好处：
-        # 1. 简化自回归逻辑（Stage i 基于 Stage i-1 的输出细化）
-        # 2. 减少长程依赖（避免 Stage 5 直接 attend 到 Stage 0）
-        # 3. 更容易与测试时对齐（测试时只需传入上一个 stage 的 outputs）
-        tgt_tgt_mask = torch.full((Q_final, Q_final), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype)
-        
+
+        # tgt → GT maskmask
+        attn_mask_2d[tgt_start:, Q_context : Q_context + T] = tgt_to_gt_mask
+
+        # 3.6 tgt ↔ tgt: causalmask Stage i Stage i-1 Stage i
+        # Translated note.
+        # 1. Stage i Stage i-1
+        # 2. Stage 5 attend Stage 0
+        # 3. stage outputs
+        tgt_tgt_mask = torch.full(
+            (Q_final, Q_final), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype
+        )
+
         row_offset = 0
         for i in range(len(stage_indices)):
-            n_rows = stage_len_list[i]  # Stage i 的 query 数量
-            
+            n_rows = stage_len_list[i]  # Stage i query
+
             if i == 0:
-                # Stage 0: 只能看到自己
+                # Stage 0:
                 visible_start = 0
                 visible_end = stage_len_list[0]
             else:
-                # Stage i (i>0): 可以看到 Stage i-1 和自己
-                visible_start = sum(stage_len_list[:i-1])  # Stage i-1 的起始位置
-                visible_end = sum(stage_len_list[:i+1])     # Stage i 的结束位置
-            
-            # 设置可见区域为 0（其他区域保持 NEG_INF）
-            tgt_tgt_mask[row_offset:row_offset+n_rows, visible_start:visible_end] = 0.0
-            
+                # Stage i (i>0): Stage i-1
+                visible_start = sum(stage_len_list[: i - 1])  # Stage i-1 position
+                visible_end = sum(stage_len_list[: i + 1])  # Stage i position
+
+            # visible 0 NEG_INF
+            tgt_tgt_mask[
+                row_offset : row_offset + n_rows, visible_start:visible_end
+            ] = 0.0
+
             row_offset += n_rows
-        
+
         attn_mask_2d[tgt_start:, tgt_start:] = tgt_tgt_mask
-        
-        # ---- 4. 扩展到 4D 并融合 padding mask ----
-        attn_bias = attn_mask_2d.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L).contiguous()
-        
-        # 处理 base 的 padding mask
+
+        # ---- 4. expand 4D merge padding mask ----
+        attn_bias = (
+            attn_mask_2d.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L).contiguous()
+        )
+
+        # process base padding mask
         if attention_mask is None:
             attention_mask = torch.ones(B, Q_context, dtype=torch.bool, device=device)
         else:
             attention_mask = attention_mask.to(device=device, dtype=torch.bool)
-        
-        # GT 和 query 部分默认全部有效
+
+        # GT query partdefault
         gt_mask = torch.ones(B, T, dtype=torch.bool, device=device)
         q_mask = torch.ones(B, Q_final, dtype=torch.bool, device=device)
         mask_2d_bool = torch.cat([attention_mask, gt_mask, q_mask], dim=1)  # (B, L)
-        
-        # 屏蔽列（key 不可见）和行（query 不能看）
+
+        # key visible query
         attn_bias = attn_bias.masked_fill((~mask_2d_bool).view(B, 1, 1, L), NEG_INF)
         attn_bias = attn_bias.masked_fill((~mask_2d_bool).view(B, 1, L, 1), NEG_INF)
-        
-        # ---- 5. "全行被屏蔽"保险（避免 softmax NaN）----
+
+        # ---- 5. "" softmax NaN ----
         row_all_masked = (attn_bias <= (NEG_INF * 0.5)).all(dim=-1, keepdim=True)
-        eye = torch.eye(L, device=llm_device, dtype=llm_dtype).unsqueeze(0).unsqueeze(1).expand(B, 1, L, L)
+        eye = (
+            torch.eye(L, device=llm_device, dtype=llm_dtype)
+            .unsqueeze(0)
+            .unsqueeze(1)
+            .expand(B, 1, L, L)
+        )
         fix_row = torch.full_like(attn_bias, NEG_INF)
         fix_row = torch.where(eye.bool(), torch.zeros_like(attn_bias), fix_row)
         attn_bias = torch.where(row_all_masked, fix_row, attn_bias)
-        
-        # ---- 6. 数值清洗 ----
+
+        # ---- 6. numericalsanitize ----
         attn_bias = torch.nan_to_num(attn_bias, nan=0.0, posinf=POS_INF, neginf=NEG_INF)
-        
+
         # ---- 7. position_ids ----
         if position_ids is None:
-            position_ids = torch.arange(0, L, dtype=torch.long, device=device).unsqueeze(0).repeat(B, 1)
+            position_ids = (
+                torch.arange(0, L, dtype=torch.long, device=device)
+                .unsqueeze(0)
+                .repeat(B, 1)
+            )
         else:
             if position_ids.size(1) == Q_context:
                 last_pos = position_ids[:, -1:]
-                incr_gt = torch.arange(1, T + 1, device=device, dtype=position_ids.dtype).unsqueeze(0)
-                incr_q = torch.arange(T + 1, T + Q_final + 1, device=device, dtype=position_ids.dtype).unsqueeze(0)
-                position_ids = torch.cat([position_ids, last_pos + incr_gt, last_pos + incr_q], dim=1)
-        
-        # ---- 8. dtype/device 对齐 ----
-        inputs_embeds = inputs_embeds.to(device=llm_device, dtype=llm_dtype).contiguous()
+                incr_gt = torch.arange(
+                    1, T + 1, device=device, dtype=position_ids.dtype
+                ).unsqueeze(0)
+                incr_q = torch.arange(
+                    T + 1, T + Q_final + 1, device=device, dtype=position_ids.dtype
+                ).unsqueeze(0)
+                position_ids = torch.cat(
+                    [position_ids, last_pos + incr_gt, last_pos + incr_q], dim=1
+                )
+
+        # ---- 8. dtype/device ----
+        inputs_embeds = inputs_embeds.to(
+            device=llm_device, dtype=llm_dtype
+        ).contiguous()
         position_ids = position_ids.to(device=llm_device, dtype=torch.long)
-        
-        # ---- 9. 过模型（使用 4D 掩码）----
+
+        # ---- 9. 4D mask ----
         outputs = self.model.forward_support_4d(
             input_ids=None,
             inputs_embeds=inputs_embeds,
@@ -1358,27 +1594,29 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             output_hidden_states=True if return_full_hidden else False,
             return_dict=True,
         )
-        
+
         last_hidden = outputs.last_hidden_state  # [B, L, D]
-        last_hidden = torch.nan_to_num(last_hidden, nan=0.0, posinf=POS_INF, neginf=NEG_INF)
-        
-        # 提取 final_tgt 对应的输出：[B, Q_final, D]
+        last_hidden = torch.nan_to_num(
+            last_hidden, nan=0.0, posinf=POS_INF, neginf=NEG_INF
+        )
+
+        # final_tgt [B, Q_final, D]
         final_tgt_output = last_hidden[:, tgt_start:, :]  # [B, Q_final, D]
-        
+
         if detach:
             final_tgt_output = final_tgt_output.detach()
-        
-        # 返回 final_tgt_output（按 stage 顺序）和辅助信息
-        # 外部可以根据 stage_indices 来提取每个 stage 的输出
+
+        # return final_tgt_output stage
+        # stage_indices stage
         updated = {
             "inputs_embeds": inputs_embeds,
             "attention_mask_2d": mask_2d_bool.to(llm_device, dtype=torch.long),
             "attention_mask_4d": attn_bias,
             "position_ids": position_ids,
-            "stage_indices": stage_indices,          # 传出 stage_indices
-            "final_tgt_output": final_tgt_output,    # 按 stage 顺序的输出
+            "stage_indices": stage_indices,  # stage_indices
+            "final_tgt_output": final_tgt_output,  # stage
         }
-        
+
         if return_full_hidden:
             return final_tgt_output, updated, outputs.hidden_states
         else:
@@ -1386,48 +1624,53 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
 
     def forward_queries_parallel_v2(
         self,
-        base_inputs_embeds: torch.Tensor,           # [B, Q_context, D]  视觉+导航上下文
-        query_embeds: torch.Tensor,                 # [B, Q, D]  所有时间步的 queries（已按stage顺序排列）
-        stage_indices: List[List[int]],             # 多尺度索引，如 [[5], [2,4], [1,3,5], [0,1,2,3,4,5]]
-        attention_mask: Optional[torch.Tensor] = None,  # [B, Q_context] base 的 padding mask
+        base_inputs_embeds: torch.Tensor,  # [B, Q_context, D] +
+        query_embeds: torch.Tensor,  # [B, Q, D] queries stage
+        stage_indices: List[List[int]],  # [[5], [2,4], [1,3,5], [0,1,2,3,4,5]]
+        attention_mask: Optional[
+            torch.Tensor
+        ] = None,  # [B, Q_context] base padding mask
         position_ids: Optional[torch.LongTensor] = None,
         training: bool = False,
         detach: bool = False,
         return_full_hidden: bool = False,
         use_time_position_encoding: bool = False,
-        ablation_mask = 'none', # casual bidirectional
+        ablation_mask="none",  # casual bidirectional
     ):
         """
-        V4并行解码：简化版，不使用GT/预测点嵌入，仅context+stages_tgt
-        
-        核心改进：
-        - 序列结构：[context, stage0_tgt, stage1_tgt, ..., stageN_tgt]
-        - mask规则：
-          1. context ↔ context: 双向可见
-          2. context → stages: 禁止（context不看未来）
-          3. stages → context: 可见（利用视觉信息）
-          4. stage_i → stage_{i-1}: 可见（依赖上一层）
-          5. stage_i ↔ stage_i: 双向可见
-          6. stage_i → stage_j (j>i or j<i-1): 禁止（不看未来或更早层）
-        
-        Args:
-            base_inputs_embeds: (B, Q_context, D) 视觉+导航上下文
-            query_embeds: (B, Q, D) 所有时间步的query（按原始顺序，非stage顺序）
-            stage_indices: 多尺度索引列表，如 [[5], [2,4], [1,3,5], [0,1,2,3,4,5]]
-            attention_mask: (B, Q_context) context 的 padding mask
-            training: 是否训练模式
-        
-        Returns:
-            final_tgt_output: (B, Q_final, D) 按stage顺序的输出特征
-            updated: dict，包含stage_indices、stage_len_list等信息
+        V4 GT/ context+stages_tgt
+
+        core
+        - [context, stage0_tgt, stage1_tgt, ..., stageN_tgt]
+        - mask
+        1. context ↔ context: bidirectionalvisible
+        2. context → stages: forbidden context
+        3. stages → context: visible
+        4. stage_i → stage_{i-1}: visible
+        5. stage_i ↔ stage_i: bidirectionalvisible
+        6. stage_i → stage_j (j>i or j<i-1): forbidden
+
+                Args:
+        base_inputs_embeds: (B, Q_context, D) +
+        query_embeds: (B, Q, D) query original stage
+        stage_indices: [[5], [2,4], [1,3,5], [0,1,2,3,4,5]]
+        attention_mask: (B, Q_context) context padding mask
+        training: training
+
+                Returns:
+        final_tgt_output: (B, Q_final, D) stage
+        updated: dict stage_indices stage_len_list
         """
-        # ---- 形状检查 ----
+        # ---- shapecheck ----
         B, Q_context, D = base_inputs_embeds.shape
         Bq, T, Dq = query_embeds.shape
-        assert B == Bq and D == Dq == self.model.config.hidden_size, \
+        assert B == Bq and D == Dq == self.model.config.hidden_size, (
             f"Shape mismatch: B={B}/{Bq}, D={D}/{Dq}/{self.model.config.hidden_size}"
+        )
         import os, ipdb
-        if os.getenv("ACTION_DEBUG") == "1": ipdb.set_trace()         
+
+        if os.getenv("ACTION_DEBUG") == "1":
+            ipdb.set_trace()
         device = base_inputs_embeds.device
         llm = self.model
         llm_param = next(llm.parameters())
@@ -1435,218 +1678,271 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         llm_device = llm_param.device
         NEG_INF = torch.finfo(llm_dtype).min
         POS_INF = torch.finfo(llm_dtype).max
-        
-        # ---- 数值清洗 ----
+
+        # ---- numericalsanitize ----
         base_inputs_embeds = sanitize_inputs_embeds(base_inputs_embeds)
         query_embeds = self.sanitize_tensor(query_embeds)
-        
-        # ---- 1. 重组queries按stage顺序 ----
+
+        # ---- 1. queriesstage ----
         stage_tgt_list = []
         stage_len_list = []
         for i in range(len(stage_indices)):
             stage_tgt_list.append(query_embeds[:, stage_indices[i], :])
             stage_len_list.append(len(stage_indices[i]))
-        final_tgt = torch.cat(stage_tgt_list, dim=1)  # (B, Q_final, D) torch.Size([2, 21, 4096])
+        final_tgt = torch.cat(
+            stage_tgt_list, dim=1
+        )  # (B, Q_final, D) torch.Size([2, 21, 4096])
         Q_final = final_tgt.shape[1]
-        
-        # 验证：Q_final应等于所有stage长度之和
-        assert Q_final == sum(stage_len_list), \
+
+        # validate Q_finalstage
+        assert Q_final == sum(stage_len_list), (
             f"Q_final={Q_final} should equal sum(stage_len_list)={sum(stage_len_list)}"
-        
-        # ---- 2. 拼接embeds：[context, stages_tgt] ----
-        inputs_embeds = torch.cat([base_inputs_embeds, final_tgt], dim=1)  # [B, Q_context+Q_final, D]
+        )
+
+        # ---- 2. concatenateembeds [context, stages_tgt] ----
+        inputs_embeds = torch.cat(
+            [base_inputs_embeds, final_tgt], dim=1
+        )  # [B, Q_context+Q_final, D]
         L = Q_context + Q_final
-        
-        # # ---- 3. 构造多尺度自回归掩码 ----
+
+        # # ---- 3. buildmask ----
         # attn_mask_2d = torch.zeros((L, L), device=llm_device, dtype=llm_dtype)
-        
-        # # 3.1 context ↔ context: 双向可见（已经是0）
-        
-        # # 3.2 context → stages: 禁止
+
+        # # 3.1 context ↔ context: bidirectionalvisible 0
+
+        # # 3.2 context → stages: forbidden
         # attn_mask_2d[:Q_context, Q_context:] = NEG_INF
-        
-        # # 3.3 stages → context: 允许（已经是0）
-        
-        # # 3.4 stages ↔ stages: 分层因果掩码
-        # # stage_i 可以看到 stage_{i-1} 和自己，不能看到其他
+
+        # # 3.3 stages → context: 0
+
+        # # 3.4 stages ↔ stages: causalmask
+        # # stage_i stage_{i-1}
         # tgt_start = Q_context
         # tgt_tgt_mask = torch.full((Q_final, Q_final), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype)
-        
+
         # row_offset = 0
         # for i in range(len(stage_indices)):
-        #     n_rows = stage_len_list[i]  # stage i 的query数量
-            
+        # n_rows = stage_len_list[i] # stage i query
+
         #     if i == 0:
-        #         # Stage 0: 只能看到自己
+        # # Stage 0:
         #         visible_start = 0
         #         visible_end = stage_len_list[0]
         #     else:
-        #         # Stage i (i>0): 可以看到stage_{i-1}和自己
-        #         visible_start = sum(stage_len_list[:i-1])  # stage_{i-1}的起始位置
-        #         visible_end = sum(stage_len_list[:i+1])     # stage_i的结束位置
-            
-        #     # 设置可见区域为0（其余保持NEG_INF）
+        # # Stage i (i>0): stage_{i-1}
+        # visible_start = sum(stage_len_list[:i-1]) # stage_{i-1}position
+        # visible_end = sum(stage_len_list[:i+1]) # stage_iposition
+
+        # # visible0 NEG_INF
         #     tgt_tgt_mask[row_offset:row_offset+n_rows, visible_start:visible_end] = 0.0
-            
+
         #     row_offset += n_rows
-        
+
         # attn_mask_2d[tgt_start:, tgt_start:] = tgt_tgt_mask
-        
-        # ---- 3. 构造注意力掩码（根据ablation_mask参数选择掩码类型）----
-        if ablation_mask == 'causal':
-            # 消融实验：纯因果掩码（标准下三角掩码）
-            # 每个位置只能看到自己及之前的位置
-            attn_mask_2d = torch.triu(
-                torch.ones((L, L), device=llm_device, dtype=llm_dtype), 
-                diagonal=1
-            ) * NEG_INF
-            
-        elif ablation_mask == 'bidirectional':
-            # 消融实验：纯双向掩码（全部可见）
-            # 所有位置之间都可以互相看见
+
+        # ---- 3. buildnotemask ablation_maskmask ----
+        if ablation_mask == "causal":
+            # causalmask mask
+            # positionposition
+            attn_mask_2d = (
+                torch.triu(
+                    torch.ones((L, L), device=llm_device, dtype=llm_dtype), diagonal=1
+                )
+                * NEG_INF
+            )
+
+        elif ablation_mask == "bidirectional":
+            # bidirectionalmask visible
+            # position
             attn_mask_2d = torch.zeros((L, L), device=llm_device, dtype=llm_dtype)
-            
-        else:  # ablation_mask == 'none' or 'multiscale' (默认)
-            # 默认：多尺度自回归掩码（混合掩码设计）
+
+        else:  # ablation_mask == 'none' or 'multiscale' (default)
+            # default mask mask
             attn_mask_2d = torch.zeros((L, L), device=llm_device, dtype=llm_dtype)
-            
-            # 3.1 context ↔ context: 双向可见（已经是0）
-            
-            # 3.2 context → stages: 禁止
+
+            # 3.1 context ↔ context: bidirectionalvisible 0
+
+            # 3.2 context → stages: forbidden
             attn_mask_2d[:Q_context, Q_context:] = NEG_INF
-            
-            # 3.3 stages → context: 允许（已经是0）
-            
-            # 3.4 stages ↔ stages: 分层因果掩码
-            # stage_i 可以看到 stage_{i-1} 和自己，不能看到其他
+
+            # 3.3 stages → context: 0
+
+            # 3.4 stages ↔ stages: causalmask
+            # stage_i stage_{i-1}
             tgt_start = Q_context
-            tgt_tgt_mask = torch.full((Q_final, Q_final), fill_value=NEG_INF, device=llm_device, dtype=llm_dtype)
-            
+            tgt_tgt_mask = torch.full(
+                (Q_final, Q_final),
+                fill_value=NEG_INF,
+                device=llm_device,
+                dtype=llm_dtype,
+            )
+
             row_offset = 0
             for i in range(len(stage_indices)):
-                n_rows = stage_len_list[i]  # stage i 的query数量
-                
+                n_rows = stage_len_list[i]  # stage i query
+
                 if i == 0:
-                    # Stage 0: 只能看到自己
+                    # Stage 0:
                     visible_start = 0
                     visible_end = stage_len_list[0]
                 else:
-                    # Stage i (i>0): 可以看到stage_{i-1}和自己
-                    visible_start = sum(stage_len_list[:i-1])  # stage_{i-1}的起始位置
-                    visible_end = sum(stage_len_list[:i+1])     # stage_i的结束位置
-                
-                # 设置可见区域为0（其余保持NEG_INF）
-                tgt_tgt_mask[row_offset:row_offset+n_rows, visible_start:visible_end] = 0.0
-                
+                    # Stage i (i>0): stage_{i-1}
+                    visible_start = sum(stage_len_list[: i - 1])  # stage_{i-1}position
+                    visible_end = sum(stage_len_list[: i + 1])  # stage_iposition
+
+                # visible0 NEG_INF
+                tgt_tgt_mask[
+                    row_offset : row_offset + n_rows, visible_start:visible_end
+                ] = 0.0
+
                 row_offset += n_rows
-            
+
             attn_mask_2d[tgt_start:, tgt_start:] = tgt_tgt_mask
 
+        # ---- 4. expand4Dmergepadding mask ----
+        attn_bias = (
+            attn_mask_2d.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L).contiguous()
+        )
 
-        # ---- 4. 扩展到4D并融合padding mask ----
-        attn_bias = attn_mask_2d.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L).contiguous()
-        
-        # 处理context的padding mask
+        # processcontextpadding mask
         if attention_mask is None:
             attention_mask = torch.ones(B, Q_context, dtype=torch.bool, device=device)
         else:
             attention_mask = attention_mask.to(device=device, dtype=torch.bool)
-        
-        # stages默认全部有效
+
+        # stagesdefault
         stages_mask = torch.ones(B, Q_final, dtype=torch.bool, device=device)
         mask_2d_bool = torch.cat([attention_mask, stages_mask], dim=1)  # (B, L)
-        
-        # 屏蔽列（key不可见）和行（query不能看）
+
+        # keyvisible query
         attn_bias = attn_bias.masked_fill((~mask_2d_bool).view(B, 1, 1, L), NEG_INF)
         attn_bias = attn_bias.masked_fill((~mask_2d_bool).view(B, 1, L, 1), NEG_INF)
-        
-        # ---- 5. "全行被屏蔽"保险（避免softmax NaN）----
-        row_all_masked = (attn_bias <= (NEG_INF * 0.5)).all(dim=-1, keepdim=True)  # (B,1,L,1)
-        eye = torch.eye(L, device=llm_device, dtype=llm_dtype).unsqueeze(0).unsqueeze(1).expand(B, 1, L, L)
+
+        # ---- 5. "" softmax NaN ----
+        row_all_masked = (attn_bias <= (NEG_INF * 0.5)).all(
+            dim=-1, keepdim=True
+        )  # (B,1,L,1)
+        eye = (
+            torch.eye(L, device=llm_device, dtype=llm_dtype)
+            .unsqueeze(0)
+            .unsqueeze(1)
+            .expand(B, 1, L, L)
+        )
         fix_row = torch.full_like(attn_bias, NEG_INF)
         fix_row = torch.where(eye.bool(), torch.zeros_like(attn_bias), fix_row)
         attn_bias = torch.where(row_all_masked, fix_row, attn_bias)
-        
-        # ---- 6. 数值清洗 ----
-        attn_bias = torch.nan_to_num(attn_bias, nan=0.0, posinf=POS_INF, neginf=NEG_INF)
-        
-        if use_time_position_encoding:
-            # ---- 7. position_ids（关键修复：targets 用“真实时间步”的位置编码）----
-            # 我们先构造一个长度为 Q_final 的时间步索引表：例如 [[5],[2,4],[1,3,5],...] -> [5,2,4,1,3,5,...]
-            # 这个 time_index 用来给每个 target token 指定“它实际代表的时间步 t”
-            # 最终 position_ids = [0..Q_context-1, base_offset + time_index[0], base_offset + time_index[1], ...]
-            # 其中 base_offset = Q_context 或者（如果外部传了 base 的 position_ids）使用它最后一个位置作为参考。
 
-            # 1) 展平成一维列表（Python list -> Tensor），长度 = Q_final
-            #    注意：stage_indices 是一个 List[List[int]]
+        # ---- 6. numericalsanitize ----
+        attn_bias = torch.nan_to_num(attn_bias, nan=0.0, posinf=POS_INF, neginf=NEG_INF)
+
+        if use_time_position_encoding:
+            # ---- 7. position_ids targets position ----
+            # build Q_final [[5],[2,4],[1,3,5],...] -> [5,2,4,1,3,5,...]
+            # time_index target token t
+            # position_ids = [0..Q_context-1, base_offset + time_index[0], base_offset + time_index[1], ...]
+            # base_offset = Q_context base position_ids position
+
+            # 1) Python list -> Tensor = Q_final
+            # note stage_indices List[List[int]]
             flat_time_index = []
             for idxs in stage_indices:
-                flat_time_index.extend(idxs)  # 追加这个 stage 的时间步索引
-            # 变成 (Q_final,) 的 LongTensor，放在同一 device 上
-            tgt_time_index = torch.tensor(flat_time_index, device=device, dtype=torch.long)  # [Q_final]
+                flat_time_index.extend(idxs)  # stage
+            # (Q_final,) LongTensor device
+            tgt_time_index = torch.tensor(
+                flat_time_index, device=device, dtype=torch.long
+            )  # [Q_final]
 
-            # 2) 基座 context 的 position_ids
+            # 2) context position_ids
             if position_ids is None:
-                # base/context 的位置：0..Q_context-1
-                base_pos = torch.arange(0, Q_context, device=device, dtype=torch.long).unsqueeze(0).repeat(B, 1)  # [B, Q_context]
-                # 以 base 的最后一个位置为偏移，给 targets 赋“真实时间步位置”
-                # 注意 +1 是为了让第 0 个时间步与 base 之间有一个明显的间隔；不加也可以，但建议加 1。
+                # base/context position 0..Q_context-1
+                base_pos = (
+                    torch.arange(0, Q_context, device=device, dtype=torch.long)
+                    .unsqueeze(0)
+                    .repeat(B, 1)
+                )  # [B, Q_context]
+                # base position targets position
+                # note +1 0 base 1
                 base_last = base_pos[:, -1:]  # [B,1]
-                pos_tgt = base_last + 1 + tgt_time_index.view(1, -1).expand(B, -1)  # [B, Q_final]，每个样本一致
+                pos_tgt = (
+                    base_last + 1 + tgt_time_index.view(1, -1).expand(B, -1)
+                )  # [B, Q_final]
 
-                position_ids = torch.cat([base_pos, pos_tgt], dim=1)  # [B, Q_context + Q_final]
+                position_ids = torch.cat(
+                    [base_pos, pos_tgt], dim=1
+                )  # [B, Q_context + Q_final]
             else:
-                # 如果外部已经给了 base 的 position_ids：
-                #   - 当它只覆盖了 base（形状 [B, Q_context]）时，我们在此基础上扩展 targets；
-                #   - 当它已经包含了 targets（形状 [B, Q_context + Q_final]）时，我们会“重写”targets 部分，
-                #     保证 targets 的位置=base_last+1+真实时间步。
-                assert position_ids.dim() == 2 and position_ids.size(0) == B, "Unexpected position_ids shape"
+                # base position_ids
+                # - base shape [B, Q_context] expand targets
+                # - targets shape [B, Q_context + Q_final] targets part
+                # targets position=base_last+1+
+                assert position_ids.dim() == 2 and position_ids.size(0) == B, (
+                    "Unexpected position_ids shape"
+                )
 
                 if position_ids.size(1) == Q_context:
-                    base_pos = position_ids.to(device=device, dtype=torch.long)                # [B, Q_context]
-                    base_last = base_pos[:, -1:]                                              # [B, 1]
-                    pos_tgt = base_last + 1 + tgt_time_index.view(1, -1).expand(B, -1)        # [B, Q_final]
-                    position_ids = torch.cat([base_pos, pos_tgt], dim=1)                      # [B, L]
+                    base_pos = position_ids.to(
+                        device=device, dtype=torch.long
+                    )  # [B, Q_context]
+                    base_last = base_pos[:, -1:]  # [B, 1]
+                    pos_tgt = (
+                        base_last + 1 + tgt_time_index.view(1, -1).expand(B, -1)
+                    )  # [B, Q_final]
+                    position_ids = torch.cat([base_pos, pos_tgt], dim=1)  # [B, L]
                 else:
-                    # 已含 targets 的情形：我们保留 base 的部分，只“覆盖” targets 的位置为时间步语义
-                    assert position_ids.size(1) == (Q_context + Q_final), \
+                    # targets base part targets position
+                    assert position_ids.size(1) == (Q_context + Q_final), (
                         f"position_ids length must be Q_context({Q_context})+Q_final({Q_final})"
-                    base_pos = position_ids[:, :Q_context].to(device=device, dtype=torch.long)  # [B, Q_context]
-                    base_last = base_pos[:, -1:]                                                # [B, 1]
-                    pos_tgt = base_last + 1 + tgt_time_index.view(1, -1).expand(B, -1)          # [B, Q_final]
-                    position_ids = torch.cat([base_pos, pos_tgt], dim=1)    
+                    )
+                    base_pos = position_ids[:, :Q_context].to(
+                        device=device, dtype=torch.long
+                    )  # [B, Q_context]
+                    base_last = base_pos[:, -1:]  # [B, 1]
+                    pos_tgt = (
+                        base_last + 1 + tgt_time_index.view(1, -1).expand(B, -1)
+                    )  # [B, Q_final]
+                    position_ids = torch.cat([base_pos, pos_tgt], dim=1)
         else:
-            # ---- 7. position_ids（连续递增）----
+            # ---- 7. position_ids ----
             if position_ids is None:
-                position_ids = torch.arange(0, L, dtype=torch.long, device=device).unsqueeze(0).repeat(B, 1)
+                position_ids = (
+                    torch.arange(0, L, dtype=torch.long, device=device)
+                    .unsqueeze(0)
+                    .repeat(B, 1)
+                )
             else:
                 if position_ids.size(1) == Q_context:
                     last_pos = position_ids[:, -1:]
-                    incr_stages = torch.arange(1, Q_final + 1, device=device, dtype=position_ids.dtype).unsqueeze(0)
-                    position_ids = torch.cat([position_ids, last_pos + incr_stages], dim=1)
-        
-        # ---- 8. dtype/device对齐 ----
-        inputs_embeds = inputs_embeds.to(device=llm_device, dtype=llm_dtype).contiguous()
+                    incr_stages = torch.arange(
+                        1, Q_final + 1, device=device, dtype=position_ids.dtype
+                    ).unsqueeze(0)
+                    position_ids = torch.cat(
+                        [position_ids, last_pos + incr_stages], dim=1
+                    )
+
+        # ---- 8. dtype/device ----
+        inputs_embeds = inputs_embeds.to(
+            device=llm_device, dtype=llm_dtype
+        ).contiguous()
         position_ids = position_ids.to(device=llm_device, dtype=torch.long)
-        
-        # ---- 9. 过模型（根据mask类型选择实现）----
-        # 检查是否可以使用Flash Attention（仅在简单mask场景）
+
+        # ---- 9. mask ----
+        # checkFlash Attention mask
         use_flash = (
-            os.getenv("FLASHUSE", "0") == "1" 
-            and FLASH_ATTN_AVAILABLE 
-            and ablation_mask in ['causal', 'bidirectional']
-            # and not return_full_hidden  # flash路径暂不支持返回中间hidden states
+            os.getenv("FLASHUSE", "0") == "1"
+            and FLASH_ATTN_AVAILABLE
+            and ablation_mask in ["causal", "bidirectional"]
+            # and not return_full_hidden # flashpathreturnhidden states
         )
-        
+
         if use_flash:
-            # 使用Flash Attention加速路径
+            # Flash Attentionpath
             logger.info(f"Using Flash Attention with mask type: {ablation_mask}")
-            is_causal = (ablation_mask == 'causal')
-            
+            is_causal = ablation_mask == "causal"
+
             outputs = self.model.forward_with_flash_attention(
                 inputs_embeds=inputs_embeds,
                 position_ids=position_ids,
-                attention_mask=mask_2d_bool,  # 使用2D bool mask
+                attention_mask=mask_2d_bool,  # 2D bool mask
                 is_causal=is_causal,
                 use_cache=False,
                 output_attentions=False,
@@ -1654,10 +1950,12 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 return_dict=True,
             )
         else:
-            # 使用标准4D mask路径
+            # 4D maskpath
             if use_flash and not FLASH_ATTN_AVAILABLE:
-                logger.warning("FLASHUSE=1 but Flash Attention is not available. Falling back to standard attention.")
-            
+                logger.warning(
+                    "FLASHUSE=1 but Flash Attention is not available. Falling back to standard attention."
+                )
+
             outputs = self.model.forward_support_4d(
                 input_ids=None,
                 inputs_embeds=inputs_embeds,
@@ -1668,17 +1966,19 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 output_hidden_states=True if return_full_hidden else False,
                 return_dict=True,
             )
-        
+
         last_hidden = outputs.last_hidden_state  # [B, L, D]
-        last_hidden = torch.nan_to_num(last_hidden, nan=0.0, posinf=POS_INF, neginf=NEG_INF)
-        
-        # 提取stages对应的输出：[B, Q_final, D]
+        last_hidden = torch.nan_to_num(
+            last_hidden, nan=0.0, posinf=POS_INF, neginf=NEG_INF
+        )
+
+        # stages [B, Q_final, D]
         final_tgt_output = last_hidden[:, Q_context:, :]
-        
+
         if detach:
             final_tgt_output = final_tgt_output.detach()
-        
-        # 返回结果和辅助信息
+
+        # return
         updated = {
             "inputs_embeds": inputs_embeds,
             "attention_mask_2d": mask_2d_bool.to(llm_device, dtype=torch.long),
@@ -1688,12 +1988,18 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             "stage_len_list": stage_len_list,
             "final_tgt_output": final_tgt_output,
         }
-        
+
         if return_full_hidden:
-            return final_tgt_output, updated, outputs.hidden_states if outputs.hidden_states is not None else final_tgt_output
+            return (
+                final_tgt_output,
+                updated,
+                outputs.hidden_states
+                if outputs.hidden_states is not None
+                else final_tgt_output,
+            )
         else:
             return final_tgt_output, updated
-    
+
     @torch.no_grad()
     def generate(
         self,
@@ -1712,46 +2018,34 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
 
         if images is not None:
             if trajectories is not None or points is not None:
-                (
-                    inputs,
-                    position_ids,
-                    attention_mask,
-                    _,
-                    inputs_embeds,
-                    _,
-                    _
-                ) = self.prepare_inputs_labels_for_multimodal_traj(
-                    inputs,
-                    position_ids,
-                    attention_mask,
-                    None,
-                    None,
-                    images,
-                    points,
-                    trajectories,
-                    ego_features,
-                    image_sizes=image_sizes
+                (inputs, position_ids, attention_mask, _, inputs_embeds, _, _) = (
+                    self.prepare_inputs_labels_for_multimodal_traj(
+                        inputs,
+                        position_ids,
+                        attention_mask,
+                        None,
+                        None,
+                        images,
+                        points,
+                        trajectories,
+                        ego_features,
+                        image_sizes=image_sizes,
+                    )
                 )
             else:
-                (
-                    inputs,
-                    position_ids,
-                    attention_mask,
-                    _,
-                    inputs_embeds,
-                    _
-                ) = self.prepare_inputs_labels_for_multimodal(
-                    inputs,
-                    position_ids,
-                    attention_mask,
-                    None,
-                    None,
-                    images,
-                    image_sizes=image_sizes
+                (inputs, position_ids, attention_mask, _, inputs_embeds, _) = (
+                    self.prepare_inputs_labels_for_multimodal(
+                        inputs,
+                        position_ids,
+                        attention_mask,
+                        None,
+                        None,
+                        images,
+                        image_sizes=image_sizes,
+                    )
                 )
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
-
 
         inputs_embeds = sanitize_inputs_embeds(inputs_embeds)
 
@@ -1759,32 +2053,37 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             position_ids=position_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
-            **kwargs
+            **kwargs,
         )
 
-
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None,
-                                      inputs_embeds=None, **kwargs):
+    def prepare_inputs_for_generation(
+        self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs
+    ):
         images = kwargs.pop("images", None)
         image_sizes = kwargs.pop("image_sizes", None)
         inputs = super().prepare_inputs_for_generation(
-            input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, **kwargs
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            **kwargs,
         )
         if images is not None:
-            inputs['images'] = images
+            inputs["images"] = images
         if image_sizes is not None:
-            inputs['image_sizes'] = image_sizes
+            inputs["image_sizes"] = image_sizes
         return inputs
+
 
 AutoConfig.register("llava_llama", LlavaConfig)
 AutoModelForCausalLM.register(LlavaConfig, LlavaLlamaForCausalLM)
 
+
 def sanitize_inputs_embeds(inputs_embeds: torch.Tensor, eps: float = 1e-5):
     """
-    检查并修复 inputs_embeds 中的 NaN、Inf 和异常值。
+    check inputs_embeds NaN Inf
     """
     orig_dtype = inputs_embeds.dtype
-    
+
     if torch.isnan(inputs_embeds).any():
         print("Warning: NaNs detected in inputs_embeds. Replacing with zeros.")
         inputs_embeds = torch.nan_to_num(inputs_embeds, nan=0.0)
@@ -1795,7 +2094,9 @@ def sanitize_inputs_embeds(inputs_embeds: torch.Tensor, eps: float = 1e-5):
 
     max_abs = torch.max(torch.abs(inputs_embeds))
     if max_abs > 1e4:
-        print(f"Warning: Very large values detected in inputs_embeds (max={max_abs.item():.2e}). Clipping.")
+        print(
+            f"Warning: Very large values detected in inputs_embeds (max={max_abs.item():.2e}). Clipping."
+        )
         inputs_embeds = torch.clamp(inputs_embeds, min=-1e4, max=1e4)
 
     return inputs_embeds.to(dtype=orig_dtype)

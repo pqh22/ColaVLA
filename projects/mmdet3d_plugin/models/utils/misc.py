@@ -7,46 +7,45 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-双LoRA使用示例：
+LoRAexample
 
-# 1. 加载带有双LoRA的模型
+# 1. loadLoRA
 model = load_model(
     base_model="path/to/llama",
     use_lora=True,
     frozen=True,
-    use_double_lora=True,  # 启用双LoRA
+use_double_lora=True, # enableLoRA
     r=16,
     alpha=16
 )
 
-# 2. 查看adapter信息
+# 2. adapter
 from projects.mmdet3d_plugin.models.utils.misc import get_lora_adapter_info
 info = get_lora_adapter_info(model)
 print(f"Available adapters: {info['adapters']}")  # ['lora_1', 'lora_2']
 print(f"Active adapters: {info['active_adapters']}")
 
-# 3. 切换到不同的adapter
-model.switch_lora_adapter("lora_1")  # 使用第一个LoRA
+# 3. switchadapter
+model.switch_lora_adapter("lora_1") # LoRA
 output1 = model(input_ids=..., ...)
 
-model.switch_lora_adapter("lora_2")  # 切换到第二个LoRA
+model.switch_lora_adapter("lora_2") # switchLoRA
 output2 = model(input_ids=..., ...)
 
-# 4. 同时启用两个adapter（相加模式）
+# 4. enableadapter
 model.enable_lora_adapters(["lora_1", "lora_2"])
 output_combined = model(input_ids=..., ...)
 
-# 5. 保存和加载特定adapter
-# 保存 lora_1
+# 5. saveloadadapter
+# save lora_1
 model.save_pretrained("./checkpoints/lora_1", selected_adapters=["lora_1"])
-# 保存 lora_2
+# save lora_2
 model.save_pretrained("./checkpoints/lora_2", selected_adapters=["lora_2"])
 
-# 加载特定adapter
+# loadadapter
 from peft import PeftModel
 model = PeftModel.from_pretrained(base_model, "./checkpoints/lora_1", adapter_name="lora_1")
-model.load_adapter("./checkpoints/lora_2", adapter_name="lora_2")
-"""
+model.load_adapter("./checkpoints/lora_2", adapter_name="lora_2")"""
 
 import torch
 import torch.nn as nn
@@ -339,7 +338,7 @@ def load_model(base_model, use_lora, frozen, finetune_emb=False, new_token_ids=N
         if use_double_lora:
             # import os, ipdb
             # if os.getenv("LORA_DEBUG") == "1": ipdb.set_trace() 
-            # 双LoRA模式：创建两个独立的adapter
+            # LoRA adapter
             peft_config_1 = LoraConfig(
                     r=r,
                     lora_alpha=alpha,
@@ -356,23 +355,23 @@ def load_model(base_model, use_lora, frozen, finetune_emb=False, new_token_ids=N
                     bias="none",
                     task_type=task_type)
             
-            # 添加第一个adapter
+            # adapter
             model = get_peft_model(model, peft_config_1, adapter_name="lora_1")
-            # 添加第二个adapter
+            # adapter
             model.add_adapter("lora_2", peft_config_2)
             
-            # 默认激活第一个adapter
-            model.set_adapter_double(["lora_1", "lora_2"]) # 注意这个是要在源码中自定义，正常
+            # defaultadapter
+            model.set_adapter_double(["lora_1", "lora_2"]) # note
             
-            # 将所有可训练参数转为float32
+            # trainingfloat32
             for param in filter(lambda p: p.requires_grad, model.parameters()):
                 param.data = param.data.to(torch.float32)
 
-            model.set_adapter("lora_1") # 暂时只启动lora1，后面用的时候再启动lora2
+            model.set_adapter("lora_1") # lora1 lora2
 
 
         else:
-            # 单LoRA模式：原有逻辑
+            # LoRA
             peft_config = LoraConfig(
                     r=r,
                     lora_alpha=alpha,
@@ -389,13 +388,13 @@ def load_model(base_model, use_lora, frozen, finetune_emb=False, new_token_ids=N
 
 def get_lora_adapter_info(model):
     """
-    获取模型的LoRA adapter信息
+getLoRA adapter
     
     Args:
-        model: PEFT模型
+model: PEFT
     
     Returns:
-        dict: 包含adapter信息的字典
+dict: adapterdictionary
     """
     if not hasattr(model, 'peft_config'):
         return {"has_lora": False}

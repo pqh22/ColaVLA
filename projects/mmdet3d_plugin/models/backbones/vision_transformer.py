@@ -336,7 +336,7 @@ class DinoVisionTransformer(nn.Module):
         patch_H = self.img_size // self.patch_size
         patch_W = self.img_size // self.patch_size
         assert N == patch_H * patch_W
-        return ret["x_norm_patchtokens"].reshape(B, patch_H, patch_W, C) # 我们是只需要backbone
+        return ret["x_norm_patchtokens"].reshape(B, patch_H, patch_W, C) # backbone
 
 
 def vit_small(patch_size=16, **kwargs):

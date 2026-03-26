@@ -129,7 +129,7 @@ class CustomNuScenesDataset(NuScenesDataset):
 
         ego_pose_inv = invert_matrix_egopose_numpy(ego_pose)
         
-        # 核心部分    
+        # corepart
         input_dict = dict(
             can_bus = info['can_bus'],
             command = info['gt_planning_command'],

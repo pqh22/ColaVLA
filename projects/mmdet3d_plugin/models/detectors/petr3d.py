@@ -117,12 +117,12 @@ class Petr3D(MVXTwoStageDetector):
         self.position_range = nn.Parameter(torch.tensor(
             position_range), requires_grad=False)
         
-        if LID: # Quadratic depth bins 非均匀深度假设 靠近的深度点密集 平方分布
+        if LID: # Quadratic depth bins
             index  = torch.arange(start=0, end=depth_num, step=1).float()
             index_1 = index + 1
             bin_size = (self.position_range[3] - depth_start) / (depth_num * (1 + depth_num))
             coords_d = depth_start + bin_size * index * index_1
-        else: # Linear depth bins 均匀深度假设 均匀分布
+        else: # Linear depth bins
             index  = torch.arange(start=0, end=depth_num, step=1).float()
             bin_size = (self.position_range[3] - depth_start) / depth_num
             coords_d = depth_start + bin_size * index
@@ -217,7 +217,7 @@ class Petr3D(MVXTwoStageDetector):
 
         intrinsic = torch.stack([data['intrinsics'][..., 0, 0], data['intrinsics'][..., 1, 1]], dim=-1) # torch.Size([2, 6, 2])
         intrinsic = torch.abs(intrinsic) / 1e3 # value stable
-        intrinsic = intrinsic.repeat(1, H*W, 1).view(B, -1, 2) # torch.Size([2, 9600, 2]) 连续的6个为一组 重复1600次
+        intrinsic = intrinsic.repeat(1, H*W, 1).view(B, -1, 2) # torch.Size([2, 9600, 2]) 6 1600
         LEN = intrinsic.size(1) # 9600
 
         num_sample_tokens = LEN
@@ -235,19 +235,19 @@ class Petr3D(MVXTwoStageDetector):
         coords = torch.cat((coords, torch.ones_like(coords[..., :1])), -1)
         coords[..., :2] = coords[..., :2] * torch.maximum(coords[..., 2:3], torch.ones_like(coords[..., 2:3])*eps)
 
-        coords = coords.unsqueeze(-1) # torch.Size([2, 9600, 64, 4, 1]) 齐次坐标
+        coords = coords.unsqueeze(-1) # torch.Size([2, 9600, 64, 4, 1])
 
         img2lidars = data['lidar2img'].inverse() # [2, 6, 4, 4]
         img2lidars = img2lidars.view(BN, 1, 1, 4, 4).repeat(1, H*W, D, 1, 1).view(B, LEN, D, 4, 4) # torch.Size([2, 9600, 64, 4, 4])
 
         coords3d = torch.matmul(img2lidars, coords).squeeze(-1)[..., :3]
-        coords3d[..., 0:3] = (coords3d[..., 0:3] - self.position_range[0:3]) / (self.position_range[3:6] - self.position_range[0:3]) # 范围标准化
-        coords3d = coords3d.reshape(B, -1, D*3) # torch.Size([2, 9600, 192]) 不同深度的坐标flatten
+        coords3d[..., 0:3] = (coords3d[..., 0:3] - self.position_range[0:3]) / (self.position_range[3:6] - self.position_range[0:3]) # Translated note.
+        coords3d = coords3d.reshape(B, -1, D*3) # torch.Size([2, 9600, 192]) flatten
       
-        pos_embed  = inverse_sigmoid(coords3d) # 将0,1映射回实数全空间 但最大也<20
+        pos_embed  = inverse_sigmoid(coords3d) # 0,1 <20
         coords_position_embeding = self.position_encoder(pos_embed) # MLP torch.Size([2, 9600, 256])
 
-        return coords_position_embeding # 如此朴实无华的MLP
+        return coords_position_embeding # MLP
 
 
 
@@ -280,7 +280,7 @@ class Petr3D(MVXTwoStageDetector):
         import os, ipdb
         if os.getenv("DEBUG") == "1": ipdb.set_trace()
         B = data['img'].shape[0]
-        location = self.prepare_location(img_metas, **data) # torch.Size([12, 40, 40, 2]) 0.0125 - 0.9875 0.0125 - 0.9875 原图归一化后的空间位置
+        location = self.prepare_location(img_metas, **data) # torch.Size([12, 40, 40, 2]) 0.0125 - 0.9875 0.0125 - 0.9875 position
 
         outs_roi = self.forward_roi_head(location, **data) # {'topk_indexes': None}
 
@@ -288,14 +288,14 @@ class Petr3D(MVXTwoStageDetector):
         losses = dict()
         if self.with_pts_bbox: # cls and box
             outs, det_query = self.pts_bbox_head(img_metas, pos_embed, **data) # StreamPETRHead dict_keys(['all_cls_scores', 'all_bbox_preds', 'dn_mask_dict'])
-            vision_embeded_obj = det_query.clone() # det_query是单独为vlm维护的query，包括三维感知信息和canbus command信息 [2, 257, 4096]
+            vision_embeded_obj = det_query.clone() # det_queryvlmquery canbus command [2, 257, 4096]
 
             loss_inputs = [gt_bboxes_3d, gt_labels_3d, outs]
-            losses.update(self.pts_bbox_head.loss(*loss_inputs)) # loss前的dx指的是decoder中第x层的分数的损失
+            losses.update(self.pts_bbox_head.loss(*loss_inputs)) # lossdxdecoderx
             
         if self.with_map_head:
             outs, map_query = self.map_head(img_metas, pos_embed, **data) # PETRHeadM dict_keys(['all_lane_cls_one2one', 'all_lane_preds_one2one', 'all_lane_cls_one2many', 'all_lane_preds_one2many', 'outs_dec_one2one', 'outs_dec_one2many'])
-            vision_embeded_map = map_query.clone() # torch.Size([2, 256, 4096]) 同上
+            vision_embeded_map = map_query.clone() # torch.Size([2, 256, 4096])
             loss_inputs = [lane_pts, outs, img_metas]
             losses.update(self.map_head.loss(*loss_inputs))
         

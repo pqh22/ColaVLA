@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 """
-将vla_results目录下的所有预测结果整合成一个pkl文件
-格式: {sample_token: trajectory_array(6,2)}
-"""
+vla_resultsdirectorypklfile
+: {sample_token: trajectory_array(6,2)}"""
 
 import os
 import pickle
@@ -14,53 +13,53 @@ import argparse
 
 def merge_vla_results(vla_results_dir, output_path):
     """
-    合并vla_results目录下的所有pkl文件
+vla_resultsdirectorypklfile
     
     Args:
-        vla_results_dir: vla_results目录路径
-        output_path: 输出pkl文件路径
+vla_results_dir: vla_resultsdirectorypath
+output_path: pklfilepath
     """
     vla_results_dir = Path(vla_results_dir)
     
-    # 检查目录是否存在
+    # checkdirectory
     if not vla_results_dir.exists():
         raise ValueError(f"Directory does not exist: {vla_results_dir}")
     
-    # 获取所有pkl文件
+    # getpklfile
     pkl_files = list(vla_results_dir.glob("*.pkl"))
     print(f"Found {len(pkl_files)} pkl files in {vla_results_dir}")
     
     if len(pkl_files) == 0:
         raise ValueError(f"No pkl files found in {vla_results_dir}")
     
-    # 创建结果字典
+    # dictionary
     merged_results = {}
     
-    # 遍历所有pkl文件
+    # pklfile
     for pkl_file in tqdm(pkl_files, desc="Merging predictions"):
-        # 获取sample_token（文件名去掉.pkl后缀）
+        # getsample_token file.pkl
         sample_token = pkl_file.stem
         
         try:
-            # 读取预测轨迹
+            # Translated note.
             with open(pkl_file, 'rb') as f:
                 trajectory = pickle.load(f)
             
-            # 确保是numpy数组
+            # ensurenumpy
             if not isinstance(trajectory, np.ndarray):
                 trajectory = np.array(trajectory)
             
-            # 检查形状
+            # checkshape
             if trajectory.shape != (6, 2):
                 print(f"Warning: {sample_token} has shape {trajectory.shape}, expected (6, 2)")
-                # 尝试reshape或者跳过
+                # reshape
                 if trajectory.size == 12:
                     trajectory = trajectory.reshape(6, 2)
                 else:
                     print(f"Skipping {sample_token} due to incompatible shape")
                     continue
             
-            # 添加到结果字典
+            # dictionary
             merged_results[sample_token] = trajectory
             
         except Exception as e:
@@ -69,7 +68,7 @@ def merge_vla_results(vla_results_dir, output_path):
     
     print(f"\nSuccessfully merged {len(merged_results)} predictions")
     
-    # 保存结果
+    # save
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
@@ -78,14 +77,14 @@ def merge_vla_results(vla_results_dir, output_path):
     
     print(f"Saved merged results to: {output_path}")
     
-    # 验证保存的文件
+    # validatesavefile
     with open(output_path, 'rb') as f:
         loaded_results = pickle.load(f)
     
     print(f"\nVerification:")
     print(f"  Total samples: {len(loaded_results)}")
     
-    # 检查一个样本
+    # check
     if len(loaded_results) > 0:
         sample_token = list(loaded_results.keys())[0]
         sample_traj = loaded_results[sample_token]

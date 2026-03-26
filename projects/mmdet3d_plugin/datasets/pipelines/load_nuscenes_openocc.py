@@ -1,4 +1,4 @@
-#import open3d as o3d
+# import open3d as o3d
 import trimesh
 import mmcv
 import numpy as np
@@ -14,11 +14,21 @@ import pdb
 import torch.nn.functional as F
 import copy
 
+
 @PIPELINES.register_module()
 class LoadOccupancy(object):
-
-    def __init__(self, to_float32=True, use_semantic=False, occ_path=None, grid_size=[512, 512, 40], unoccupied=0,
-            pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0], gt_resize_ratio=1, cal_visible=False, use_vel=False):
+    def __init__(
+        self,
+        to_float32=True,
+        use_semantic=False,
+        occ_path=None,
+        grid_size=[512, 512, 40],
+        unoccupied=0,
+        pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
+        gt_resize_ratio=1,
+        cal_visible=False,
+        use_vel=False,
+    ):
         self.to_float32 = to_float32
         self.use_semantic = use_semantic
         self.occ_path = occ_path
@@ -30,94 +40,141 @@ class LoadOccupancy(object):
         self.voxel_size = (self.pc_range[3:] - self.pc_range[:3]) / self.grid_size
         self.gt_resize_ratio = gt_resize_ratio
         self.use_vel = use_vel
-    
+
     def __call__(self, results):
-        rel_path = 'scene_{0}/occupancy/{1}.npy'.format(results['scene_token'], results['lidar_token'])
+        rel_path = "scene_{0}/occupancy/{1}.npy".format(
+            results["scene_token"], results["lidar_token"]
+        )
         #  [z y x cls] or [z y x vx vy vz cls]
         pcd = np.load(os.path.join(self.occ_path, rel_path))
         pcd_label = pcd[..., -1:]
-        pcd_label[pcd_label==0] = 255
-        pcd_np_cor = self.voxel2world(pcd[..., [2,1,0]] + 0.5)  # x y z
+        pcd_label[pcd_label == 0] = 255
+        pcd_np_cor = self.voxel2world(pcd[..., [2, 1, 0]] + 0.5)  # x y z
         untransformed_occ = copy.deepcopy(pcd_np_cor)  # N 4
 
         # only ida do not need bda_mat
-        results['bda_mat'] = torch.eye(3, dtype=torch.float32)
+        results["bda_mat"] = torch.eye(3, dtype=torch.float32)
 
         # bevdet augmentation
-        pcd_np_cor = (results['bda_mat'] @ torch.from_numpy(pcd_np_cor).unsqueeze(-1).float()).squeeze(-1).numpy() # 处理bda相关，可能要适配数据增强的情况，因为要考虑图像对应的处理
+        pcd_np_cor = (
+            (results["bda_mat"] @ torch.from_numpy(pcd_np_cor).unsqueeze(-1).float())
+            .squeeze(-1)
+            .numpy()
+        )  # processbda data imageprocess
         pcd_np_cor = self.world2voxel(pcd_np_cor)
 
         # make sure the point is in the grid
-        pcd_np_cor = np.clip(pcd_np_cor, np.array([0,0,0]), self.grid_size - 1)
+        pcd_np_cor = np.clip(pcd_np_cor, np.array([0, 0, 0]), self.grid_size - 1)
         transformed_occ = copy.deepcopy(pcd_np_cor)
         pcd_np = np.concatenate([pcd_np_cor, pcd_label], axis=-1)
 
         # velocity
         if self.use_vel:
-            pcd_vel = pcd[..., [3,4,5]]  # x y z
-            pcd_vel = (results['bda_mat'] @ torch.from_numpy(pcd_vel).unsqueeze(-1).float()).squeeze(-1).numpy()
+            pcd_vel = pcd[..., [3, 4, 5]]  # x y z
+            pcd_vel = (
+                (results["bda_mat"] @ torch.from_numpy(pcd_vel).unsqueeze(-1).float())
+                .squeeze(-1)
+                .numpy()
+            )
             pcd_vel = np.concatenate([pcd_np, pcd_vel], axis=-1)  # [x y z cls vx vy vz]
-            results['gt_vel'] = pcd_vel
+            results["gt_vel"] = pcd_vel
 
         # 255: noise, 1-16 normal classes, 0 unoccupied
-        pcd_np = pcd_np[np.lexsort((pcd_np_cor[:, 0], pcd_np_cor[:, 1], pcd_np_cor[:, 2])), :]
+        pcd_np = pcd_np[
+            np.lexsort((pcd_np_cor[:, 0], pcd_np_cor[:, 1], pcd_np_cor[:, 2])), :
+        ]
         pcd_np = pcd_np.astype(np.int64)
         processed_label = np.ones(self.grid_size, dtype=np.uint8) * self.unoccupied
         processed_label = nb_process_label(processed_label, pcd_np)
-        results['gt_occ'] = processed_label
-
+        results["gt_occ"] = processed_label
 
         if self.cal_visible:
             visible_mask = np.zeros(self.grid_size, dtype=np.uint8)
             # camera branch
-            if 'img_inputs' in results.keys():
-                _, rots, trans, intrins, post_rots, post_trans = results['img_inputs'][:6]
-                occ_uvds = self.project_points(torch.Tensor(untransformed_occ), 
-                                                rots, trans, intrins, post_rots, post_trans)  # N 6 3
+            if "img_inputs" in results.keys():
+                _, rots, trans, intrins, post_rots, post_trans = results["img_inputs"][
+                    :6
+                ]
+                occ_uvds = self.project_points(
+                    torch.Tensor(untransformed_occ),
+                    rots,
+                    trans,
+                    intrins,
+                    post_rots,
+                    post_trans,
+                )  # N 6 3
                 N, n_cam, _ = occ_uvds.shape
                 img_visible_mask = np.zeros((N, n_cam))
-                img_h, img_w = results['img_inputs'][0].shape[-2:]
+                img_h, img_w = results["img_inputs"][0].shape[-2:]
                 for cam_idx in range(n_cam):
-                    basic_mask = (occ_uvds[:, cam_idx, 0] >= 0) & (occ_uvds[:, cam_idx, 0] < img_w) & \
-                                (occ_uvds[:, cam_idx, 1] >= 0) & (occ_uvds[:, cam_idx, 1] < img_h) & \
-                                (occ_uvds[:, cam_idx, 2] >= 0)
+                    basic_mask = (
+                        (occ_uvds[:, cam_idx, 0] >= 0)
+                        & (occ_uvds[:, cam_idx, 0] < img_w)
+                        & (occ_uvds[:, cam_idx, 1] >= 0)
+                        & (occ_uvds[:, cam_idx, 1] < img_h)
+                        & (occ_uvds[:, cam_idx, 2] >= 0)
+                    )
 
                     basic_valid_occ = occ_uvds[basic_mask, cam_idx]  # M 3
                     M = basic_valid_occ.shape[0]  # TODO M~=?
                     basic_valid_occ[:, 2] = basic_valid_occ[:, 2] * 10
                     basic_valid_occ = basic_valid_occ.cpu().numpy()
-                    basic_valid_occ = basic_valid_occ.astype(np.int16)  # TODO first round then int?
+                    basic_valid_occ = basic_valid_occ.astype(
+                        np.int16
+                    )  # TODO first round then int?
                     depth_canva = np.ones((img_h, img_w), dtype=np.uint16) * 2048
                     nb_valid_mask = np.zeros((M), dtype=np.bool)
-                    nb_valid_mask = nb_process_img_points(basic_valid_occ, depth_canva, nb_valid_mask)  # M
+                    nb_valid_mask = nb_process_img_points(
+                        basic_valid_occ, depth_canva, nb_valid_mask
+                    )  # M
                     img_visible_mask[basic_mask, cam_idx] = nb_valid_mask
 
                 img_visible_mask = img_visible_mask.sum(1) > 0  # N  1:occupied  0: free
-                img_visible_mask = img_visible_mask.reshape(-1, 1).astype(pcd_label.dtype) 
+                img_visible_mask = img_visible_mask.reshape(-1, 1).astype(
+                    pcd_label.dtype
+                )
 
-                img_pcd_np = np.concatenate([transformed_occ, img_visible_mask], axis=-1)
-                img_pcd_np = img_pcd_np[np.lexsort((transformed_occ[:, 0], transformed_occ[:, 1], transformed_occ[:, 2])), :]
+                img_pcd_np = np.concatenate(
+                    [transformed_occ, img_visible_mask], axis=-1
+                )
+                img_pcd_np = img_pcd_np[
+                    np.lexsort(
+                        (
+                            transformed_occ[:, 0],
+                            transformed_occ[:, 1],
+                            transformed_occ[:, 2],
+                        )
+                    ),
+                    :,
+                ]
                 img_pcd_np = img_pcd_np.astype(np.int64)
                 img_occ_label = np.zeros(self.grid_size, dtype=np.uint8)
-                voxel_img = nb_process_label(img_occ_label, img_pcd_np) 
+                voxel_img = nb_process_label(img_occ_label, img_pcd_np)
                 visible_mask = visible_mask | voxel_img
-                results['img_visible_mask'] = voxel_img
-
+                results["img_visible_mask"] = voxel_img
 
             # lidar branch
-            if 'points' in results.keys():
-                pts = results['points'].tensor.cpu().numpy()[:, :3]
-                pts_in_range = ((pts>=self.pc_range[:3]) & (pts<self.pc_range[3:])).sum(1)==3
+            if "points" in results.keys():
+                pts = results["points"].tensor.cpu().numpy()[:, :3]
+                pts_in_range = (
+                    (pts >= self.pc_range[:3]) & (pts < self.pc_range[3:])
+                ).sum(1) == 3
                 pts = pts[pts_in_range]
-                pts = (pts - self.pc_range[:3])/self.voxel_size
-                pts = np.concatenate([pts, np.ones((pts.shape[0], 1)).astype(pts.dtype)], axis=1) 
-                pts = pts[np.lexsort((pts[:, 0], pts[:, 1], pts[:, 2])), :].astype(np.int64)
+                pts = (pts - self.pc_range[:3]) / self.voxel_size
+                pts = np.concatenate(
+                    [pts, np.ones((pts.shape[0], 1)).astype(pts.dtype)], axis=1
+                )
+                pts = pts[np.lexsort((pts[:, 0], pts[:, 1], pts[:, 2])), :].astype(
+                    np.int64
+                )
                 pts_occ_label = np.zeros(self.grid_size, dtype=np.uint8)
-                voxel_pts = nb_process_label(pts_occ_label, pts)  # W H D 1:occupied 0:free
+                voxel_pts = nb_process_label(
+                    pts_occ_label, pts
+                )  # W H D 1:occupied 0:free
                 visible_mask = visible_mask | voxel_pts
-                results['lidar_visible_mask'] = voxel_pts
+                results["lidar_visible_mask"] = voxel_pts
 
-            results['visible_mask'] = visible_mask
+            results["visible_mask"] = visible_mask
 
         return results
 
@@ -127,42 +184,41 @@ class LoadOccupancy(object):
         """
         return voxel * self.voxel_size[None, :] + self.pc_range[:3][None, :]
 
-
     def world2voxel(self, wolrd):
         """
         wolrd: [N, 3]
         """
         return (wolrd - self.pc_range[:3][None, :]) / self.voxel_size[None, :]
 
-
     def __repr__(self):
         """str: Return a string that describes the module."""
         repr_str = self.__class__.__name__
-        repr_str += f'(to_float32={self.to_float32}'
+        repr_str += f"(to_float32={self.to_float32}"
         return repr_str
 
     def project_points(self, points, rots, trans, intrins, post_rots, post_trans):
-        
+
         # from lidar to camera
         points = points.reshape(-1, 1, 3)
         points = points - trans.reshape(1, -1, 3)
         inv_rots = rots.inverse().unsqueeze(0)
-        points = (inv_rots @ points.unsqueeze(-1))
-        
+        points = inv_rots @ points.unsqueeze(-1)
+
         # from camera to raw pixel
         points = (intrins.unsqueeze(0) @ points).squeeze(-1)
         points_d = points[..., 2:3]
         points_uv = points[..., :2] / points_d
-        
+
         # from raw pixel to transformed pixel
         points_uv = post_rots[:, :2, :2].unsqueeze(0) @ points_uv.unsqueeze(-1)
         points_uv = points_uv.squeeze(-1) + post_trans[..., :2].unsqueeze(0)
         points_uvd = torch.cat((points_uv, points_d), dim=2)
-        
+
         return points_uvd
-    
+
+
 # b1:boolean, u1: uint8, i2: int16, u2: uint16
-@nb.jit('b1[:](i2[:,:],u2[:,:],b1[:])', nopython=True, cache=True, parallel=False)
+@nb.jit("b1[:](i2[:,:],u2[:,:],b1[:])", nopython=True, cache=True, parallel=False)
 def nb_process_img_points(basic_valid_occ, depth_canva, nb_valid_mask):
     # basic_valid_occ M 3
     # depth_canva H W
@@ -179,8 +235,9 @@ def nb_process_img_points(basic_valid_occ, depth_canva, nb_valid_mask):
             nb_valid_mask[i] = True
     return nb_valid_mask
 
+
 # u1: uint8, u8: uint16, i8: int64
-@nb.jit('u1[:,:,:](u1[:,:,:],i8[:,:])', nopython=True, cache=True, parallel=False)
+@nb.jit("u1[:,:,:](u1[:,:,:],i8[:,:])", nopython=True, cache=True, parallel=False)
 def nb_process_label_withvel(processed_label, sorted_label_voxel_pair):
     label_size = 256
     counter = np.zeros((label_size,), dtype=np.uint16)
@@ -189,17 +246,21 @@ def nb_process_label_withvel(processed_label, sorted_label_voxel_pair):
     for i in range(1, sorted_label_voxel_pair.shape[0]):
         cur_ind = sorted_label_voxel_pair[i, :3]
         if not np.all(np.equal(cur_ind, cur_sear_ind)):
-            processed_label[cur_sear_ind[0], cur_sear_ind[1], cur_sear_ind[2]] = np.argmax(counter)
+            processed_label[cur_sear_ind[0], cur_sear_ind[1], cur_sear_ind[2]] = (
+                np.argmax(counter)
+            )
             counter = np.zeros((label_size,), dtype=np.uint16)
             cur_sear_ind = cur_ind
         counter[sorted_label_voxel_pair[i, 3]] += 1
-    processed_label[cur_sear_ind[0], cur_sear_ind[1], cur_sear_ind[2]] = np.argmax(counter)
-    
+    processed_label[cur_sear_ind[0], cur_sear_ind[1], cur_sear_ind[2]] = np.argmax(
+        counter
+    )
+
     return processed_label
 
 
 # u1: uint8, u8: uint16, i8: int64
-@nb.jit('u1[:,:,:](u1[:,:,:],i8[:,:])', nopython=True, cache=True, parallel=False)
+@nb.jit("u1[:,:,:](u1[:,:,:],i8[:,:])", nopython=True, cache=True, parallel=False)
 def nb_process_label(processed_label, sorted_label_voxel_pair):
     label_size = 256
     counter = np.zeros((label_size,), dtype=np.uint16)
@@ -208,57 +269,63 @@ def nb_process_label(processed_label, sorted_label_voxel_pair):
     for i in range(1, sorted_label_voxel_pair.shape[0]):
         cur_ind = sorted_label_voxel_pair[i, :3]
         if not np.all(np.equal(cur_ind, cur_sear_ind)):
-            processed_label[cur_sear_ind[0], cur_sear_ind[1], cur_sear_ind[2]] = np.argmax(counter)
+            processed_label[cur_sear_ind[0], cur_sear_ind[1], cur_sear_ind[2]] = (
+                np.argmax(counter)
+            )
             counter = np.zeros((label_size,), dtype=np.uint16)
             cur_sear_ind = cur_ind
         counter[sorted_label_voxel_pair[i, 3]] += 1
-    processed_label[cur_sear_ind[0], cur_sear_ind[1], cur_sear_ind[2]] = np.argmax(counter)
-    
+    processed_label[cur_sear_ind[0], cur_sear_ind[1], cur_sear_ind[2]] = np.argmax(
+        counter
+    )
+
     return processed_label
 
 
 def _bev_transform(yaw, scale, flip_x, flip_y):
-    """在BEV(x,y)平面上的旋转+缩放+翻转，保持 z 轴不变。返回 3x3 张量。"""
+    """Apply BEV-plane rotation, scaling, and flipping while keeping z unchanged; return a 3x3 tensor."""
     c, s = np.cos(yaw), np.sin(yaw)
-    R = torch.tensor([[c, -s, 0.0],
-                      [s,  c, 0.0],
-                      [0.0, 0.0, 1.0]], dtype=torch.float32)
+    R = torch.tensor([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=torch.float32)
     S = torch.diag(torch.tensor([scale, scale, 1.0], dtype=torch.float32))
-    F = torch.diag(torch.tensor([-1.0 if flip_x else 1.0,
-                                 -1.0 if flip_y else 1.0,
-                                  1.0], dtype=torch.float32))
-    # 先做翻转，再旋转，最后缩放：x' = S @ R @ F @ x
+    F = torch.diag(
+        torch.tensor(
+            [-1.0 if flip_x else 1.0, -1.0 if flip_y else 1.0, 1.0], dtype=torch.float32
+        )
+    )
+    # x' = S @ R @ F @ x
     return S @ R @ F
+
 
 def compute_bda_mat(is_train, ida_aug_conf=None, bda_aug_conf=None):
     """
-    - 仅有 IDA（图像域增强）时：返回单位矩阵（不去动 3D/BEV 的 GT）。
-    - 配置了 BDA 并希望在 BEV 上做增强时：按 bda_aug_conf 采样生成 3x3 矩阵。
+    - IDA image return 3D/BEV GT
+    - BDA BEV bda_aug_conf 3x3
     """
-    # 情况1：未提供 BDA 配置 => 仅 IDA，返回 I
+    # 1 BDA => IDA return I
     if bda_aug_conf is None:
         return torch.eye(3, dtype=torch.float32)
 
-    # 情况2：提供了 BDA 配置，但等价于“不开启”（常见判据）
-    rot_min, rot_max = bda_aug_conf.get('rot_lim', (0.0, 0.0))
-    scl_min, scl_max = bda_aug_conf.get('scale_lim', (1.0, 1.0))
-    p_fx = bda_aug_conf.get('flip_dx_ratio', 0.0)
-    p_fy = bda_aug_conf.get('flip_dy_ratio', 0.0)
+    # 2 BDA
+    rot_min, rot_max = bda_aug_conf.get("rot_lim", (0.0, 0.0))
+    scl_min, scl_max = bda_aug_conf.get("scale_lim", (1.0, 1.0))
+    p_fx = bda_aug_conf.get("flip_dx_ratio", 0.0)
+    p_fy = bda_aug_conf.get("flip_dy_ratio", 0.0)
 
     bda_is_effectively_off = (
-        abs(rot_max - rot_min) < 1e-9 and
-        abs(scl_max - scl_min) < 1e-9 and
-        p_fx <= 0.0 and p_fy <= 0.0
+        abs(rot_max - rot_min) < 1e-9
+        and abs(scl_max - scl_min) < 1e-9
+        and p_fx <= 0.0
+        and p_fy <= 0.0
     )
     if bda_is_effectively_off:
         return torch.eye(3, dtype=torch.float32)
 
-    # 情况3：真正启用 BDA（仅在训练期采样；验证/测试期恒等）
+    # 3 enable BDA training validate/
     if is_train:
-        yaw   = np.random.uniform(rot_min, rot_max)
+        yaw = np.random.uniform(rot_min, rot_max)
         scale = np.random.uniform(scl_min, scl_max)
-        flip_x = (np.random.uniform() < p_fx)
-        flip_y = (np.random.uniform() < p_fy)
+        flip_x = np.random.uniform() < p_fx
+        flip_y = np.random.uniform() < p_fy
     else:
         yaw, scale, flip_x, flip_y = 0.0, 1.0, False, False
 

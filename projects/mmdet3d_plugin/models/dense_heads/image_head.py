@@ -30,11 +30,11 @@ from torch.nn.init import xavier_uniform_
 
 # def build_bbox_coder(cfg):
 #     """Build bbox coder from config."""
-#     return TASK_UTILS.build(cfg)  # 使用 TASK_UTILS 注册器构建 bbox_coder
+# return TASK_UTILS.build(cfg) # TASK_UTILS bbox_coder
 
 # def build_transformer(cfg):
 #     """Build transformer from config."""
-#     return MODELS.build(cfg)  # 使用 MODELS 注册器构建 transformer
+# return MODELS.build(cfg) # MODELS transformer
 
 @HEADS.register_module()
 class PETRHeadImage(AnchorFreeHead):
@@ -426,7 +426,7 @@ class PETRHeadImage(AnchorFreeHead):
         # tgt = self.instance_embedding_lane.weight.unsqueeze(0).repeat(B, 1, 1)
         query_embedding = self.query_embedding.weight.unsqueeze(0).repeat(B, 1, 1) # torch.Size([1, 384, 256])
         # import ipdb; ipdb.set_trace()
-        outs_dec = self.transformer(query_embedding, memory, query_pos, pos_embed) # [HALF] 存在type不对齐，输入都已经是half 已解决 torch.Size([6, 1, 384, 256])
+        outs_dec = self.transformer(query_embedding, memory, query_pos, pos_embed) # [HALF] type half torch.Size([6, 1, 384, 256])
         vlm_memory = outs_dec[-1] # torch.Size([1, 384, 256])
         if self.output_dims is not None:
             vlm_memory = self.output_projection(vlm_memory)

@@ -249,7 +249,7 @@ class StreamPETRHead(AnchorFreeHead):
         if self.output_dims is not None:
             self.output_projection = nn.Linear(self.embed_dims, self.output_dims)
 
-        self.reference_points = nn.Embedding(self.num_query, 3) # embedding是多个parameter组成的词表，可以索引
+        self.reference_points = nn.Embedding(self.num_query, 3) # embeddingparameter
         if self.num_propagated > 0:
             self.pseudo_reference_points = nn.Embedding(self.num_propagated, 3) # 600 3
 
@@ -271,7 +271,7 @@ class StreamPETRHead(AnchorFreeHead):
     def init_weights(self):
         """Initialize weights of the transformer head."""
         # The initialization for transformer is important
-        nn.init.uniform_(self.reference_points.weight.data, 0, 1) # weight就是词表中的向量
+        nn.init.uniform_(self.reference_points.weight.data, 0, 1) # weight
         if self.num_propagated > 0:
             nn.init.uniform_(self.pseudo_reference_points.weight.data, 0, 1)
             self.pseudo_reference_points.weight.requires_grad = False
@@ -295,7 +295,7 @@ class StreamPETRHead(AnchorFreeHead):
         B = data['img_feats'].size(0)
         # refresh the memory when the scene changes
         if self.memory_embedding is None:
-            self.memory_embedding = data['img_feats'].new_zeros(B, self.memory_len, self.embed_dims) # 继承数据类型和设备
+            self.memory_embedding = data['img_feats'].new_zeros(B, self.memory_len, self.embed_dims) # data
             self.memory_reference_point = data['img_feats'].new_zeros(B, self.memory_len, 3)
             self.memory_timestamp = data['img_feats'].new_zeros(B, self.memory_len, 1)
             self.memory_egopose = data['img_feats'].new_zeros(B, self.memory_len, 4, 4)
@@ -306,8 +306,8 @@ class StreamPETRHead(AnchorFreeHead):
         else:
             self.memory_timestamp += data['timestamp'].unsqueeze(-1).unsqueeze(-1)
             self.sample_time += data['timestamp']
-            x = (torch.abs(self.sample_time) < 2.0).to(data['img_feats'].dtype) # mask 超过时间阈值就刷新
-            self.memory_egopose = data['ego_pose_inv'].unsqueeze(1) @ self.memory_egopose # 空间对齐
+            x = (torch.abs(self.sample_time) < 2.0).to(data['img_feats'].dtype) # mask
+            self.memory_egopose = data['ego_pose_inv'].unsqueeze(1) @ self.memory_egopose # Translated note.
             self.memory_reference_point = transform_reference_points(self.memory_reference_point, data['ego_pose_inv'], reverse=False)
             self.memory_timestamp = memory_refresh(self.memory_timestamp[:, :self.memory_len], x)
             self.memory_reference_point = memory_refresh(self.memory_reference_point[:, :self.memory_len], x)
@@ -335,12 +335,12 @@ class StreamPETRHead(AnchorFreeHead):
             rec_reference_points = all_bbox_preds[..., :3][-1]
             rec_velo = all_bbox_preds[..., -2:][-1]
             out_memory = outs_dec[-1]
-            rec_score = all_cls_scores[-1].sigmoid().topk(1, dim=-1).values[..., 0:1] # 这里首先将所有token的分类分数中的最大的取出来，即最有可能的类别的分数
+            rec_score = all_cls_scores[-1].sigmoid().topk(1, dim=-1).values[..., 0:1] # token
             rec_timestamp = torch.zeros_like(rec_score, dtype=torch.float64)
         
         # topk proposals
-        _, topk_indexes = torch.topk(rec_score, self.topk_proposals, dim=1) # 随后再根据分数类别的分数再选出置信度最高的，总之就是要最有信心的物体，即前景物体作为memory
-        rec_timestamp = topk_gather(rec_timestamp, topk_indexes) # 思考 这样处理还是会遗漏部分后景物体，但是全部考虑又会限制速度和精度
+        _, topk_indexes = torch.topk(rec_score, self.topk_proposals, dim=1) # memory
+        rec_timestamp = topk_gather(rec_timestamp, topk_indexes) # processpart
         rec_reference_points = topk_gather(rec_reference_points, topk_indexes).detach()
         rec_memory = topk_gather(out_memory, topk_indexes).detach()
         rec_ego_pose = topk_gather(rec_ego_pose, topk_indexes)
@@ -376,7 +376,7 @@ class StreamPETRHead(AnchorFreeHead):
         query_pos += self.time_embedding(pos2posemb1d(torch.zeros_like(reference_points[...,:1])))
         temp_pos += self.time_embedding(pos2posemb1d(self.memory_timestamp).float())
 
-        if self.num_propagated > 0: # 每次多concat300个，从memory中选出最有用的
+        if self.num_propagated > 0: # concat300 memory
             tgt = torch.cat([tgt, temp_memory[:, :self.num_propagated]], dim=1)
             query_pos = torch.cat([query_pos, temp_pos[:, :self.num_propagated]], dim=1)
             reference_points = torch.cat([reference_points, temp_reference_point[:, :self.num_propagated]], dim=1)
@@ -533,27 +533,27 @@ class StreamPETRHead(AnchorFreeHead):
         reference_points = self.reference_points.weight
         reference_points = torch.cat([torch.zeros_like(reference_points[:self.num_extra]), reference_points], dim=0) # torch.Size([856, 3])
         reference_points, attn_mask, mask_dict = self.prepare_for_dn(B, reference_points, img_metas) # GT noise for robust torch.Size([2, 1126, 3]) torch.Size([1426, 1726]) dict_keys(['known_indice', 'batch_idx', 'map_known_indice', 'known_lbs_bboxes', 'know_idx', 'pad_size'])
-        query_pos = self.query_pos(nerf_positional_encoding(reference_points.repeat(1, 1, self.n_control))) # torch.Size([2, 1126, 256]) 6个频率*2个三角函数得到33*12=369 维度再投影为256
+        query_pos = self.query_pos(nerf_positional_encoding(reference_points.repeat(1, 1, self.n_control))) # torch.Size([2, 1126, 256]) 6*233*12=369 256
         tgt = torch.zeros_like(query_pos)
 
         # prepare for the tgt and query_pos using mln.
         tgt, query_pos, reference_points, temp_memory, temp_pos, rec_ego_pose = self.temporal_alignment(query_pos, tgt, reference_points) # query -> [2, 1426, 256] temp -> 300
 
         if mask_dict and mask_dict['pad_size'] > 0: # mask for dynamic noise
-            tgt[:, mask_dict['pad_size']:mask_dict['pad_size']+self.num_extra, :] = self.query_embedding.weight.unsqueeze(0) # 这里是额外的query，是用于后续输入VLM的部分，直观上是学习与VLM适配度特征
+            tgt[:, mask_dict['pad_size']:mask_dict['pad_size']+self.num_extra, :] = self.query_embedding.weight.unsqueeze(0) # query VLMpart VLM
             query_pos[:, mask_dict['pad_size']:mask_dict['pad_size']+self.num_extra, :] = query_pos[:, mask_dict['pad_size']:mask_dict['pad_size']+self.num_extra, :] * 0
         else: 
-            tgt[:, :self.num_extra, :] = self.query_embedding.weight.unsqueeze(0) # tgt.shape[1] = pad_size + num_extra + num_query + num_propagated 里面的token大致是这么个顺序
+            tgt[:, :self.num_extra, :] = self.query_embedding.weight.unsqueeze(0) # tgt.shape[1] = pad_size + num_extra + num_query + num_propagated token
             query_pos[:, :self.num_extra, :] = query_pos[:, :self.num_extra, :] * 0
             
         # transformer here is a little different from PETR
-        outs_dec = self.transformer(tgt, memory, query_pos, pos_embed, attn_mask, temp_memory, temp_pos) # 6 * transformer block torch.Size([6, 2, 1426, 256]) 每层的输出都stack起来
+        outs_dec = self.transformer(tgt, memory, query_pos, pos_embed, attn_mask, temp_memory, temp_pos) # 6 * transformer block torch.Size([6, 2, 1426, 256]) stack
         if mask_dict and mask_dict['pad_size'] > 0:
             reference_points = torch.cat([reference_points[:, :mask_dict['pad_size'], :], reference_points[:, mask_dict['pad_size']+self.num_extra:, :]], dim=-2)
         else:
             reference_points = reference_points[:, self.num_extra:, :]
 
-        outs_dec = torch.nan_to_num(outs_dec) # 解决nan inf
+        outs_dec = torch.nan_to_num(outs_dec) # nan inf
         if mask_dict and mask_dict['pad_size'] > 0:
             vlm_memory = outs_dec[-1, :, mask_dict['pad_size']:mask_dict['pad_size']+self.num_extra, :]
             outs_dec = torch.cat([outs_dec[:, :, :mask_dict['pad_size'], :], outs_dec[:, :, mask_dict['pad_size']+self.num_extra:, :]], dim=-2)
@@ -577,16 +577,16 @@ class StreamPETRHead(AnchorFreeHead):
 
         all_cls_scores = torch.stack(outputs_classes) # torch.Size([6, 2, 1170, 10]) here 1170 = 1426 - 256
         all_bbox_preds = torch.stack(outputs_coords) # torch.Size([6, 2, 1170, 10])
-        all_bbox_preds[..., 0:3] = (all_bbox_preds[..., 0:3] * (self.pc_range[3:6] - self.pc_range[0:3]) + self.pc_range[0:3]) # 恢复到正常范围
+        all_bbox_preds[..., 0:3] = (all_bbox_preds[..., 0:3] * (self.pc_range[3:6] - self.pc_range[0:3]) + self.pc_range[0:3]) # Translated note.
 
-        # 这里主要是将command和can_bus信息放进vlm token中
+        # commandcan_busvlm token
         rec_can_bus = torch.cat([data['command'].unsqueeze(-1), data['can_bus']], dim=-1) # [2,14] 1+13
         memory_ego_pose = self.memory_egopose.reshape(B, -1, self.topk_proposals, 4, 4).flatten(-2)
         if self.output_dims is not None:
             vlm_memory = self.output_projection(vlm_memory) # torch.Size([2, 256, 4096])
-            can_bus_input = torch.cat([rec_can_bus, self.memory_canbus.flatten(-2), memory_ego_pose.mean(-2).flatten(-2)], dim=-1) # torch.Size([2, 74]) 好粗暴的处理
+            can_bus_input = torch.cat([rec_can_bus, self.memory_canbus.flatten(-2), memory_ego_pose.mean(-2).flatten(-2)], dim=-1) # torch.Size([2, 74]) process
             can_bus_embed = self.can_bus_embed(can_bus_input) # mlp 
-            #vlm_memory = torch.cat([vlm_memory, can_bus_embed.unsqueeze(-2)], dim=-2) # torch.Size([2, 257, 4096]) can_bus信息这里其实只有一个token
+            # vlm_memory = torch.cat([vlm_memory, can_bus_embed.unsqueeze(-2)], dim=-2) # torch.Size([2, 257, 4096]) can_bustoken
         # update the memory bank
         out_memory = self.post_update_memory(data, rec_ego_pose, all_cls_scores, all_bbox_preds, outs_dec, mask_dict, rec_can_bus.unsqueeze(-2))
 

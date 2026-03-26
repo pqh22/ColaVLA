@@ -310,7 +310,7 @@ test_pipeline = [
 data = dict(
     samples_per_gpu=batch_size,
     workers_per_gpu=0, # origin 4 debug 0
-    train=dict( # 构建datasets其实只用了这部分作为输入参数
+    train=dict( # datasetspart
         type=dataset_type,
         data_root=data_root,
         ann_file=data_root + 'nuscenes2d_ego_temporal_infos_train.pkl',
@@ -372,7 +372,7 @@ log_config = dict(
     hooks=[
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook',
-             log_dir=f'./tf_logs/{file_name}')  # 如果你想启用 tensorboard
+             log_dir=f'./tf_logs/{file_name}')  # enable tensorboard
     ])
 
 evaluation = dict(interval=num_iters_per_epoch*num_epochs, pipeline=test_pipeline)

@@ -246,10 +246,10 @@ class Petr3DImageSeqE2eCoT(MVXTwoStageDetector):
         # train_params = []
         # for name, param in self.named_parameters():
         #     if param.requires_grad:
-        #         print(f"需要梯度的参数: {name}")
+        # print(f": {name}")
         #         train_params.append(param)
         # if len(train_params) == 0:
-        #     raise ValueError("没有需要训练的参数")
+        # raise ValueError("training")
         self.img_head.eval()
         self.map_head.eval()
         self.pts_bbox_head.eval()
@@ -710,7 +710,7 @@ class Petr3DImageSeqE2eCoT(MVXTwoStageDetector):
                         # For first question
                         current_q = img_metas[0]['vlm_labels'].data[i]
                         conv.append_message(conv.roles[0], current_q)
-                        prompt = conv.get_prompt() + "ASSISTANT:"  # 添加 ASSISTANT:
+                        prompt = conv.get_prompt() + "ASSISTANT:"  # ASSISTANT:
                         import os, ipdb
                         if os.getenv("DEBUG") == "1": ipdb.set_trace()
                         # Use tokenizer_image_traj_token instead of tokenizer
@@ -765,7 +765,7 @@ class Petr3DImageSeqE2eCoT(MVXTwoStageDetector):
                         # For subsequent questions
                         current_q = img_metas[0]['vlm_labels'].data[i]
                         conv.append_message(conv.roles[0], current_q)
-                        prompt = conv.get_prompt() + "ASSISTANT:"  # 添加 ASSISTANT:
+                        prompt = conv.get_prompt() + "ASSISTANT:"  # ASSISTANT:
                         
                         # Use tokenizer_image_traj_token instead of tokenizer
                         combined_input_ids = torch.tensor(
@@ -830,7 +830,7 @@ class Petr3DImageSeqE2eCoT(MVXTwoStageDetector):
                             A=[current_a],
                             ))
                 
-                # 检查是否存在 sample_idx，如果不存在则不保存
+                # check sample_idx save
                 if 'sample_idx' in img_metas[0] and img_metas[0]['sample_idx'] is not None:
                     with open(self.save_path+img_metas[0]['sample_idx'], 'w') as file:
                         json.dump(generated_text, file)
@@ -857,7 +857,7 @@ class Petr3DImageSeqE2eCoT(MVXTwoStageDetector):
                         A=self.tokenizer.batch_decode(output_ids, skip_special_tokens=True),
                         ))
 
-                # 检查是否存在 sample_idx，如果不存在则不保存
+                # check sample_idx save
                 if 'sample_idx' in img_metas[0] and img_metas[0]['sample_idx'] is not None:
                     with open(self.save_path+img_metas[0]['sample_idx'], 'w') as file:
                         json.dump(generated_text, file)

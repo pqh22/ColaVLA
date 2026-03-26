@@ -86,7 +86,7 @@ def tokenizer_image_traj_token(prompt, tokenizer, image_token_index=IMAGE_TOKEN_
     input_ids = []
     offset = 0
     
-    # 处理BOS token
+    # processBOS token
     if len(chunks) > 0 and chunks[0][0] == 'text':
         first_chunk_tokens = tokenizer(chunks[0][1]).input_ids
         if len(first_chunk_tokens) > 0 and first_chunk_tokens[0] == tokenizer.bos_token_id:
@@ -96,7 +96,7 @@ def tokenizer_image_traj_token(prompt, tokenizer, image_token_index=IMAGE_TOKEN_
             input_ids.extend(first_chunk_tokens)
             chunks.pop(0)
     
-    # 处理剩余chunks，对 image 和 traj 使用相同的插入逻辑
+    # processchunks image traj
     for chunk_type, text in chunks:
         if chunk_type == 'image':
             input_ids.append(image_token_index)
@@ -230,13 +230,13 @@ def preprocess_llama_2(
             if has_image:
                 # round_len = len(tokenizer_image_token(rou, tokenizer))
                 # instruction_len = len(tokenizer_image_token(parts[0], tokenizer)) - 2
-                # 图文分支（见下一条对 tokenizer_image_token 的小改）
+                # tokenizer_image_token
                 round_len = len(tokenizer_image_token(rou, tokenizer, prepend_bos=False))
                 instruction_len = len(tokenizer_image_token(parts[0], tokenizer, prepend_bos=False))
             else:
                 # round_len = len(tokenizer(rou).input_ids)
                 # instruction_len = len(tokenizer(parts[0]).input_ids) - 2
-                # 文本分支
+                # Translated note.
                 round_len = len(tokenizer(rou, add_special_tokens=False).input_ids)
                 instruction_len = len(tokenizer(parts[0], add_special_tokens=False).input_ids)
 
@@ -487,7 +487,7 @@ def preprocess_v1_traj(
     has_image: bool = False,
     training_mode: bool =True,
     has_traj: bool = False,
-) -> Dict: # 这里还是对单个batch进行连续处理，不必考虑batch size
+) -> Dict: # batchprocess batch size
     import os, ipdb
     if os.getenv("DATA_DEBUG") == "1": ipdb.set_trace()
     conv = conversation_lib.default_conversation.copy() # Conversation(system="A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.", roles=('USER', 'ASSISTANT'), messages=[['USER', '<image>\nYou are driving in singapore. Here are predefined trajectories [<G0> <point>  <G1> <point>  <G2> <point>  <G3> <point>  <G4> <point>  <G5> <point>] for the ego car. Please select the best trajectory in the current scenario.'], ['ASSISTANT', 'The best trajectory is 0.'], ['USER', 'With the selected trajectory as a reference <traj>, please provide the planning trajectory for the ego car, which has a velocity of (0.00,0.00) m/s and an acceleration of (-0.02,-0.21) m/s^2.'], ['ASSISTANT', 'The result is [PT, (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (+0.03, 0.0)].']], offset=0, sep_style=<SeparatorStyle.TWO: 2>, sep=' ', sep2='</s>', version='v1', skip_next=False)
@@ -501,17 +501,17 @@ def preprocess_v1_traj(
             source = source[1:]
 
         conv.messages = []
-        for j, sentence in enumerate(source): # 两轮对话 len=4 每个字典里有 from value 两个key
+        for j, sentence in enumerate(source): # len=4 dictionary from value key
             role = roles[sentence["from"]]
             assert role == conv.roles[j % 2], f"{i}"
             conv.append_message(role, sentence["value"])
         conversations.append(conv.get_prompt())
 
     # Tokenize conversations
-    # 自己改其实只需要添加一份判定完全可以直接设置conversation，但是还是要注意batch size为2
+    # conversation notebatch size2
     if has_image:
         if training_mode:
-            if has_traj: # 直接就是全文了 prompt "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. USER: <image>\nYou are driving in singapore. Here are predefined trajectories [<G0> <point>  <G1> <point>  <G2> <point>  <G3> <point>  <G4> <point>  <G5> <point>] for the ego car. Please select the best trajectory in the current scenario. ASSISTANT: The best trajectory is 0.</s>USER: With the selected trajectory as a reference <traj>, please provide the planning trajectory for the ego car, which has a velocity of (0.00,0.00) m/s and an acceleration of (-0.02,-0.21) m/s^2. ASSISTANT: The result is [PT, (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (+0.03, 0.0)].</s>"
+            if has_traj: # prompt "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. USER: <image>\nYou are driving in singapore. Here are predefined trajectories [<G0> <point> <G1> <point> <G2> <point> <G3> <point> <G4> <point> <G5> <point>] for the ego car. Please select the best trajectory in the current scenario. ASSISTANT: The best trajectory is 0.</s>USER: With the selected trajectory as a reference <traj>, please provide the planning trajectory for the ego car, which has a velocity of (0.00,0.00) m/s and an acceleration of (-0.02,-0.21) m/s^2. ASSISTANT: The result is [PT, (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (+0.03, 0.0)].</s>"
                 input_ids = torch.stack([tokenizer_image_traj_token(prompt, tokenizer, return_tensors='pt') for prompt in conversations], dim=0)
             else:
                 input_ids = torch.stack([tokenizer_image_token(prompt, tokenizer, return_tensors='pt') for prompt in conversations], dim=0)

@@ -180,7 +180,7 @@ class Fp16OptimizerHookDebug(OptimizerHook):
             self.loss_scaler.load_state_dict(scaler_state_dict)
 
         m = runner.model.module if hasattr(runner.model, "module") else runner.model
-        # 只缓存需要梯度的参数，减少遍历量
+        # Translated note.
         self._named_params_cache = [
             (n, p) for n, p in m.named_parameters() if p.requires_grad
         ]
@@ -389,16 +389,16 @@ class Fp16OptimizerHookDebug(OptimizerHook):
 #         import os, ipdb
 #         if os.getenv("GRAD_DEBUG") == "1":
 
-#             # === DEBUG: 这里 grads 刚产生，还没被清理/覆盖，检测最准确 ===
+# # === DEBUG: grads / ===
 #             if self._named_params_cache is None:
-#                 # 兜底：如果没缓存，现取（一般不会走到这里）
+# #
 #                 m = runner.model.module if hasattr(runner.model, 'module') else runner.model
 #                 self._named_params_cache = [(n, p) for n, p in m.named_parameters() if p.requires_grad]
 
 #             unused = [name for name, p in self._named_params_cache if p.grad is None]
 #             need_print = (len(unused) > 0) or (not self.only_when_unused)
 #             if need_print and (self._iter_cnt % max(1, self.log_every_n) == 0):
-#                 # 分布式 rank
+# # rank
 #                 try:
 #                     import torch.distributed as dist
 #                     rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else -1
@@ -449,19 +449,19 @@ class Fp16OptimizerHookDebug(OptimizerHook):
 
 # @HOOKS.register_module()
 # class Fp16OptimizerHookDebug(OptimizerHook):  # type: ignore
-#     """Fp16 Optimizer Hook 带未参与反传参数的调试打印。
+# """Fp16 Optimizer Hook print
 
-#     与原版流程一致：
+# Translated note.
 #       1) zero_grad
 #       2) scaled_loss.backward()
-#       3) 从 fp16 模型复制 grad 到 fp32 权重
-#       4) allreduce / has_overflow / 缩放回梯度 / grad clip / step
-#       5) 拷回 fp16 权重、更新 loss_scale
+# 3) fp16 grad fp32
+# 4) allreduce / has_overflow / / grad clip / step
+# 5) fp16 loss_scale
 
-#     新增：
-#       - 在 `scaled_loss.backward()` 之后、`optimizer.step()` 之前，
-#         打印本 iter 中 **grad 为 None** 的参数名（过滤掉 requires_grad=False）。
-#       - 可配置打印条数与频率。
+# Translated note.
+# - `scaled_loss.backward()` `optimizer.step()`
+# print iter **grad None** requires_grad=False
+# - print
 #     """
 
 #     def __init__(self,
@@ -470,10 +470,10 @@ class Fp16OptimizerHookDebug(OptimizerHook):
 #                  bucket_size_mb: int = -1,
 #                  loss_scale: Union[float, str, dict] = 512.,
 #                  distributed: bool = True,
-#                  # === Debug 相关 ===
-#                  log_topk: int = 50,           # 每次最多打印多少个未用参数名
-#                  log_every_n: int = 1,         # 每隔多少个 iter 打印一次
-#                  only_when_unused: bool = True # 仅当存在未用参数时才打印
+# # === Debug ===
+# log_topk: int = 50, # print
+# log_every_n: int = 1, # iter print
+# only_when_unused: bool = True # print
 #                  ):
 #         super().__init__(grad_clip=grad_clip)
 #         self.coalesce = coalesce
@@ -495,10 +495,10 @@ class Fp16OptimizerHookDebug(OptimizerHook):
 #         self.log_every_n = int(log_every_n)
 #         self.only_when_unused = bool(only_when_unused)
 #         self._iter_cnt = 0
-#         self._named_params_cache = None  # (name, param) 缓存，避免每步遍历 named_parameters 开销
+# self._named_params_cache = None # (name, param) named_parameters
 
 #     def before_run(self, runner) -> None:
-#         # 1) 深拷贝 optimizer.param_groups，保留 fp32 master 权重
+# # 1) optimizer.param_groups fp32 master
 #         old_groups = runner.optimizer.param_groups
 #         runner.optimizer.param_groups = copy.deepcopy(runner.optimizer.param_groups)
 
@@ -513,34 +513,34 @@ class Fp16OptimizerHookDebug(OptimizerHook):
 #             state[p_map[k]] = v
 #         runner.optimizer.state = state
 
-#         # 2) 将模型转 fp16（保持参数对象次序稳定）
+# # 2) fp16
 #         wrap_fp16_model(runner.model)
 
-#         # 3) 恢复 loss_scaler
+# # 3) loss_scaler
 #         if 'fp16' in runner.meta and 'loss_scaler' in runner.meta['fp16']:
 #             self.loss_scaler.load_state_dict(runner.meta['fp16']['loss_scaler'])
 
-#         # 4) —— 关键：构建 “fp16_param ←→ fp32_param” 的稳定配对表 ——
-#         #    解包 DDP，拿到真实模块（避免 DDP 可能带来的次序差异）
+# # 4) fp16_param ←→ fp32_param
+# # DDP DDP
 #         m = runner.model.module if hasattr(runner.model, 'module') else runner.model
 
-#         fp16_params = list(m.parameters())  # 按模块参数迭代顺序
+# fp16_params = list(m.parameters()) #
 #         fp32_params = [p for g in runner.optimizer.param_groups for p in g['params']]
 
 #         if len(fp16_params) != len(fp32_params):
 #             raise RuntimeError(f"Param count mismatch: fp16={len(fp16_params)} vs fp32={len(fp32_params)}")
 
-#         # 可选：做一次形状核对，若不一致，马上报错定位
+# # shape
 #         for i, (p16, p32) in enumerate(zip(fp16_params, fp32_params)):
 #             if p16.shape != p32.shape:
 #                 raise RuntimeError(
 #                     f"Param shape mismatch at idx {i}: fp16 {tuple(p16.shape)} vs fp32 {tuple(p32.shape)}"
 #                 )
 
-#         # 保存配对表，后续复制梯度/权重只用这张表，避免“临时 zip”错位
+# # save / zip
 #         self._paired_params = list(zip(fp16_params, fp32_params))
 
-#         # 另外，缓存需要打印名字用的 named_parameters（只做一次）
+# # print named_parameters
 #         self._named_params_cache = [(n, p) for n, p in m.named_parameters() if p.requires_grad]
 
 #     def copy_grads_to_fp32(self):
@@ -555,7 +555,7 @@ class Fp16OptimizerHookDebug(OptimizerHook):
 #             p16.data.copy_(p32.data)
 
 
-#     # ====== 关键：在 step 前做“未用参数”检测 ======
+# # ====== step ======
 #     def after_train_iter(self, runner) -> None:
 #         self._iter_cnt += 1
 
@@ -567,16 +567,16 @@ class Fp16OptimizerHookDebug(OptimizerHook):
 #         scaled_loss = runner.outputs['loss'] * self.loss_scaler.loss_scale
 #         scaled_loss.backward()
 
-#         # === DEBUG: 这里 grads 刚产生，还没被清理/覆盖，检测最准确 ===
+# # === DEBUG: grads / ===
 #         if self._named_params_cache is None:
-#             # 兜底：如果没缓存，现取（一般不会走到这里）
+# #
 #             m = runner.model.module if hasattr(runner.model, 'module') else runner.model
 #             self._named_params_cache = [(n, p) for n, p in m.named_parameters() if p.requires_grad]
 
 #         unused = [name for name, p in self._named_params_cache if p.grad is None]
 #         need_print = (len(unused) > 0) or (not self.only_when_unused)
 #         if need_print and (self._iter_cnt % max(1, self.log_every_n) == 0):
-#             # 分布式 rank
+# # rank
 #             try:
 #                 import torch.distributed as dist
 #                 rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else -1
@@ -588,13 +588,13 @@ class Fp16OptimizerHookDebug(OptimizerHook):
 #             if len(unused) > self.log_topk:
 #                 runner.logger.warning(f"  ... and {len(unused) - self.log_topk} more.")
 
-#         self.copy_grads_to_fp32()  # 用稳定配对表
+# self.copy_grads_to_fp32() #
 #         fp32_weights = [p32 for _, p32 in self._paired_params]
 
 #         if self.distributed:
 #             allreduce_grads(fp32_weights, self.coalesce, self.bucket_size_mb)
 
-#         # 4) overflow 检测 / 缩放回梯度 / grad clip / step / 拷回 fp16
+# # 4) overflow / / grad clip / step / fp16
 #         has_overflow = self.loss_scaler.has_overflow(fp32_weights)
 #         if not has_overflow:
 #             for param in fp32_weights:
@@ -613,5 +613,5 @@ class Fp16OptimizerHookDebug(OptimizerHook):
 #             runner.logger.warning('Check overflow, downscale loss scale '
 #                                   f'to {self.loss_scaler.cur_scale}')
 
-#         # 5) 保存 scaler 状态
+# # 5) save scaler
 #         runner.meta.setdefault('fp16', {})['loss_scaler'] = self.loss_scaler.state_dict()

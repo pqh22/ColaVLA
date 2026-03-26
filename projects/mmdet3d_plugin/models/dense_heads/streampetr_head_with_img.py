@@ -764,7 +764,7 @@ class StreamPETRHeadWithImg(AnchorFreeHead):
         # transformer here is a little different from PETR
         outs_dec = self.transformer(
             tgt, memory, query_pos, pos_embed, attn_mask, temp_memory, temp_pos
-        )  # torch.Size([6, 2, 1170, 256]) 这里也会与所有的img tokens交互
+        )  # torch.Size([6, 2, 1170, 256]) img tokens
         if mask_dict and mask_dict["pad_size"] > 0:
             reference_points = torch.cat(
                 [
@@ -778,7 +778,7 @@ class StreamPETRHeadWithImg(AnchorFreeHead):
 
         outs_dec = torch.nan_to_num(
             outs_dec
-        )  # torch.Size([6, 2, 1170, 256]) 相当于里边没有最终输出的384个query了
+        )  # torch.Size([6, 2, 1170, 256]) 384query
         if mask_dict and mask_dict["pad_size"] > 0:
             vlm_memory = outs_dec[
                 -1, :, mask_dict["pad_size"] : mask_dict["pad_size"] + self.num_extra, :
@@ -789,7 +789,7 @@ class StreamPETRHeadWithImg(AnchorFreeHead):
                     outs_dec[:, :, mask_dict["pad_size"] + self.num_extra :, :],
                 ],
                 dim=-2,
-            )  # 其实是在这里将query抽离出来的
+            )  # query
         else:
             vlm_memory = outs_dec[-1, :, : self.num_extra, :]
             outs_dec = outs_dec[:, :, self.num_extra :, :]
@@ -869,7 +869,7 @@ class StreamPETRHeadWithImg(AnchorFreeHead):
         #         #np.save(os.path.join(self.save_path, '%s.npy' % img_metas[i]['sample_idx']), vlm_memory_256[i].cpu().numpy().astype(np.float16))
         #         np.save(os.path.join(self.save_path_canbus, '%s.npy' % img_metas[i]['sample_idx']), can_bus_input[i].cpu().numpy().astype(np.float32))
 
-        # outs_dec torch.Size([6, 2, 1170, 256]) 其中前边的270是padding的query，后边的900是最终输出的query，现在我们会根据384来选出900中的topk
+        # outs_dec torch.Size([6, 2, 1170, 256]) 270paddingquery 900query 384900topk
         # vlm_memory torch.Size([2, 384, 256])
 
         # # Select critical tokens based on cosine similarity with vlm_memory
@@ -1327,7 +1327,7 @@ class StreamPETRHeadWithImg(AnchorFreeHead):
         all_gt_bboxes_list = [gt_bboxes_list for _ in range(num_dec_layers)]
         all_gt_labels_list = [
             gt_labels_list for _ in range(num_dec_layers)
-        ]  # 每个样本对应的类别标签与box的数量都是不确定的，这种稀疏的标签如何监督，之后可以研究研究
+        ]  # box
         all_gt_bboxes_ignore_list = [gt_bboxes_ignore for _ in range(num_dec_layers)]
 
         losses_cls, losses_bbox = multi_apply(

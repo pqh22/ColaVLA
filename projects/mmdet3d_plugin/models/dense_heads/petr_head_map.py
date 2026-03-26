@@ -407,8 +407,8 @@ class PETRHeadM(AnchorFreeHead):
         query_embedding = self.query_embedding.weight.unsqueeze(0).repeat(B, 1, 1)
 
         # attn mask for Hy
-        self_attn_mask = ( # one2one是每条GT只对应一个query 精准学习匹配 one2many是多个query对应一个GT 提供冗余和扰动
-            torch.zeros([self.num_lane+self.num_extra, self.num_lane+self.num_extra]).bool().to(x.device) # 这里的mask是防止两部分的学习相互干扰
+        self_attn_mask = ( # one2oneGTquery one2manyqueryGT
+            torch.zeros([self.num_lane+self.num_extra, self.num_lane+self.num_extra]).bool().to(x.device) # maskpart
         )
         self_attn_mask[self.num_lanes_one2one+self.num_extra:, 0: self.num_lanes_one2one+self.num_extra] = True
         self_attn_mask[0: self.num_lanes_one2one+self.num_extra, self.num_lanes_one2one+self.num_extra:] = True

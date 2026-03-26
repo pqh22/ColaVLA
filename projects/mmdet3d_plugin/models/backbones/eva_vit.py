@@ -692,7 +692,7 @@ class Attention(nn.Module):
             attn = attn.softmax(dim=-1).type_as(x)
             x = (attn @ v).transpose(1, 2).reshape(B, N, -1)
             x = self.inner_attn_ln(x)
-        # 这里x变成float32了，需要转回float16
+        # xfloat32 float16
 
         if os.getenv("LATENCY") == "1": x = x.to(torch.float16)
         x = self.proj(x)

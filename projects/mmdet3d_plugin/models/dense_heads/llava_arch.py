@@ -210,13 +210,13 @@ class LlavaMetaForCausalLM(ABC):
         if image_features is not None:
             image_features = image_features.reshape(image_features.shape[0], -1, self.hidden_size).to(dtype=self.dtype)
         if trajectory_features is not None:
-            if trajectory_features.ndim == 3: # 这里的意思就是trajectory_features是2,6,4096
+            if trajectory_features.ndim == 3: # trajectory_features2,6,4096
                 trajectory_features = trajectory_features.reshape(trajectory_features.shape[0], -1, self.hidden_size).to(dtype=self.dtype) # 2,6,4096 -> 2,6,4096
-            elif trajectory_features.ndim == 4: # 这里的意思就是trajectory_features是2,6,6,4096
+            elif trajectory_features.ndim == 4: # trajectory_features2,6,6,4096
                 B, num_trajs, num_points, _ = trajectory_features.shape
                 trajectory_features = trajectory_features.reshape(B * num_trajs, num_points, self.hidden_size).to(dtype=self.dtype) 
         if points is not None:
-            points = points.reshape(-1, 1, self.hidden_size).to(dtype=self.dtype) # 2,6,4096 -> 12,1,4096 其实没问题，这里就是按照顺序放的
+            points = points.reshape(-1, 1, self.hidden_size).to(dtype=self.dtype) # 2,6,4096 -> 12,1,4096
             # points = points.reshape(points.shape[0], -1, self.hidden_size).to(dtype=self.dtype) # 2,6,4096 -> 2,6,4096
 
         # Save original values
@@ -240,8 +240,8 @@ class LlavaMetaForCausalLM(ABC):
 
         new_input_embeds = []
         new_labels = []
-        img_indices = [] if return_img_idx else None  # 存储image features的位置信息: [(batch_idx, start_pos, end_pos), ...]
-        cur_image_idx = 0 # 这里的参数是所有batch共享的，所以其实要将batch维度与后边的N放在一起
+        img_indices = [] if return_img_idx else None  # image featuresposition: [(batch_idx, start_pos, end_pos), ...]
+        cur_image_idx = 0 # batch batchN
         cur_traj_idx = 0
         cur_point_idx = 0
         cur_ego_idx = 0
@@ -263,11 +263,11 @@ class LlavaMetaForCausalLM(ABC):
                 (cur_input_ids == TRAJ_TOKEN_INDEX) | 
                 (cur_input_ids == POINT_TOKEN_INDEX) |
                 (cur_input_ids == EGO_TOKEN_INDEX)
-            )[0].tolist() + [cur_input_ids.shape[0]] # 这里是将所有特殊token选出来，同时在list的首尾添加了-1和T，与下边的算法很契合
+            )[0].tolist() + [cur_input_ids.shape[0]] # token list-1T
             cur_input_ids_no_special = []
             cur_labels_no_special = []
             for i in range(len(token_indices) - 1):
-                cur_input_ids_no_special.append(cur_input_ids[token_indices[i]+1:token_indices[i+1]]) # 很好的设计哎
+                cur_input_ids_no_special.append(cur_input_ids[token_indices[i]+1:token_indices[i+1]]) # Translated note.
                 cur_labels_no_special.append(labels[batch_idx][token_indices[i]+1:token_indices[i+1]])
             split_sizes = [x.shape[0] for x in cur_labels_no_special]
             cur_input_embeds = self.get_model().embed_tokens(torch.cat(cur_input_ids_no_special)) # 177,4096 origin input ids 184 special 7
@@ -275,14 +275,14 @@ class LlavaMetaForCausalLM(ABC):
             
             cur_new_input_embeds = []
             cur_new_labels = []
-            cur_pos = 0  # 跟踪当前batch中的位置
+            cur_pos = 0  # batchposition
 
             special_tokens = torch.where(
                 (cur_input_ids == IMAGE_TOKEN_INDEX) | 
                 (cur_input_ids == TRAJ_TOKEN_INDEX) | 
                 (cur_input_ids == POINT_TOKEN_INDEX) |
                 (cur_input_ids == EGO_TOKEN_INDEX)
-            )[0].tolist() # 其实可以直接复用上边的token indices
+            )[0].tolist() # token indices
             special_types = [] # ['image', 'trajectory', 'trajectory', 'trajectory', 'trajectory', 'trajectory', 'trajectory']
             for idx in special_tokens:
                 if cur_input_ids[idx] == IMAGE_TOKEN_INDEX:
@@ -294,9 +294,9 @@ class LlavaMetaForCausalLM(ABC):
                 else:
                     special_types.append('ego')
 
-            for i in range(len(cur_input_embeds_no_special) + len(special_types)): # 8 + 7 合理的7个分割获取8段普通嵌入
+            for i in range(len(cur_input_embeds_no_special) + len(special_types)): # 8 + 7 7get8
                 embed_idx = i // 2 if num_images > 0 and i % 2 == 1 else i
-                if i < len(cur_input_embeds_no_special): # 感觉其实这里的算法每次都会遍历，是不是其实可以直接按照对应token的位置直接放进去，但这里的速度倒是也不重要
+                if i < len(cur_input_embeds_no_special): # tokenposition
                     cur_new_input_embeds.append(cur_input_embeds_no_special[i])
                     cur_new_labels.append(cur_labels_no_special[i])
                     cur_pos += cur_input_embeds_no_special[i].shape[0]
@@ -305,7 +305,7 @@ class LlavaMetaForCausalLM(ABC):
                         try:
                             img_feat_len = image_features[cur_image_idx].shape[0]
                             if return_img_idx:
-                                # 记录该image feature在当前batch中的位置
+                                # image featurebatchposition
                                 img_indices.append((batch_idx, cur_pos, cur_pos + img_feat_len))
                             cur_new_input_embeds.append(image_features[cur_image_idx])
                         except:

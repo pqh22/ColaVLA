@@ -1,14 +1,14 @@
 # ============================================================================
 # ColaVLA Inference Configuration for NeuroNCAP Closed-loop Testing
 # ============================================================================
-# 此配置文件专门用于 NeuroNCAP 闭环测试的推理服务
-# 基于训练配置 vlm_seq_384_cot_rag5_loade6qformere2e0320_noqa_headlr20_e10_cotspeed.py
+# filededicated to NeuroNCAP inference
+# training vlm_seq_384_cot_rag5_loade6qformere2e0320_noqa_headlr20_e10_cotspeed.py
 #
-# 主要修改:
-# - 创建专门用于推理的数据处理管线
-# - 正确处理VLM prompt生成和tokenization
-# - 适配NeuroNCAP的数据格式
-# - 移除文件加载相关的步骤
+# :
+# - dedicated toinferencedataprocess
+# - processVLM prompttokenization
+# - NeuroNCAPdata
+# - fileload
 # ============================================================================
 
 _base_ = [
@@ -292,13 +292,13 @@ ida_aug_conf = {
 }
 
 # ============================================================================
-# 专门用于NeuroNCAP推理的数据处理管线
+# dedicated toNeuroNCAPinferencedataprocess
 # ============================================================================
-# 注意：这个管线专门为推理设计，不包含文件加载步骤
-# VLM的prompt生成和tokenization在runner.py中处理
+# note inference fileload
+# VLMprompttokenizationrunner.pyprocess
 
 inference_pipeline = [
-    # 图像预处理步骤
+    # imagepreprocess
     dict(type="ResizeCropFlipRotImage", data_aug_conf=ida_aug_conf, training=False),
     dict(
         type="ResizeMultiview3D",
@@ -308,14 +308,14 @@ inference_pipeline = [
     ),
     dict(type="NormalizeMultiviewImage", **img_norm_cfg),
     dict(type="PadMultiViewImage", size_divisor=32),
-    # 数据格式化 - 不包含VLM处理，因为数据已经由API提供
+    # dataformatting - VLMprocess dataAPI
     dict(
         type="PETRFormatBundle3D",
         collect_keys=collect_keys,
         class_names=class_names,
         with_label=False,
     ),
-    # 数据收集 - 只收集必要的字段
+    # datacollection - collectionfields
     dict(
         type="Collect3D",
         keys=["img"] + collect_keys,
@@ -334,10 +334,10 @@ inference_pipeline = [
 ]
 
 # ============================================================================
-# 原始训练管线（保留用于参考）
+# originaltraining kept for reference
 # ============================================================================
-# 注意：这个管线包含LoadAnnoatationVQATestSOLVE，用于训练时的VLM处理
-# 推理时不使用这个管线，因为数据格式不同
+# note LoadAnnoatationVQATestSOLVE trainingVLMprocess
+# inference data
 
 test_pipeline = [
     dict(type="LoadMultiViewImageFromFiles", to_float32=True),

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-########################## 用户参数 ##########################
+########################## User Parameters ##########################
 CONFIG=$1
 CHECKPOINT=$2
 GPUS=${3:-1}
@@ -13,21 +13,21 @@ MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 NAME=$(basename "$CONFIG" .py)
 echo "$NAME"
 
-########################## Luban 变量（可覆盖上方参数） #####
+########################## Compute Resource Parameters ########################
 GPUS=${RESOURCE_NUM_GPU:-$GPUS}
 NNODES=${DISTRIBUTED_NODE_COUNT:-$NNODES}
 NODE_RANK=${DISTRIBUTED_NODE_RANK:-$NODE_RANK}
 MASTER_FQDN=${DISTRIBUTED_MASTER_HOSTS:-$MASTER_ADDR}
 PORT=${LUBAN_AVAILBLE_PORT_0:-$PORT}
 
-########################## 解析主节点 IP ######################
+########################## Resolve Master Node IP ######################
 MASTER_ADDR=$(getent hosts "${MASTER_FQDN%%,*}" | awk '{print $1}' | head -n1)
 [[ -z "$MASTER_ADDR" ]] && { echo "[ERROR] cannot resolve $MASTER_FQDN"; exit 1; }
 
-########################## 网络接口选择 ######################
+########################## Network Interface Selection ######################
 NET_IF=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
 
-########################## NCCL/GLOO 环境 ####################
+########################## NCCL/GLOO Environment ####################
 export NCCL_SOCKET_IFNAME=$NET_IF
 export GLOO_SOCKET_IFNAME=$NET_IF
 export NCCL_IB_DISABLE=1
@@ -43,7 +43,7 @@ export CUDA_VISIBLE_DEVICES=$(seq -s, 0 $(($GPUS - 1)))
 
 conda activate colavla
 
-########################## 打印参数信息 ######################
+########################## Print Parameters ######################
 echo "========== Distributed Launch =========="
 echo "CONFIG         : $CONFIG"
 echo "CHECKPOINT     : $CHECKPOINT"
@@ -55,7 +55,7 @@ echo "PORT           : $PORT"
 echo "NET_IF         : $NET_IF"
 echo "========================================"
 
-########################## Torchrun 启动 #####################
+########################## Torchrun Launch #####################
 export DISTRIBUTED_NODE_RANK=$NODE_RANK
 export DISTRIBUTED_NODE_COUNT=$NNODES
 

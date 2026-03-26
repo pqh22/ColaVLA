@@ -549,7 +549,7 @@ class PETRHeadMapWithImg(AnchorFreeHead):
 
         vlm_memory = outs_dec[
             -1, :, : self.num_extra, :
-        ]  # torch.Size([2, 384, 256]) 注意到extra部分是在前边384个
+        ]  # torch.Size([2, 384, 256]) noteextrapart384
         vlm_memory_256 = vlm_memory.clone()
         outs_dec = outs_dec[:, :, self.num_extra :, :]  # torch.Size([6, 2, 1800, 256])
 
