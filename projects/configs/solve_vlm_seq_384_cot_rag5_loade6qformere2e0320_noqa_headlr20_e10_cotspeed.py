@@ -45,7 +45,7 @@ model = dict(
     lm_head=llm_path, # set to None if don't use llm head
     use_pred_traj_seq=True,
     use_xy=True,
-    kmeans_anchor_path='ckpts/solve_kmeans_plan_36.npy', # (3, 36, 6, 2)
+    kmeans_anchor_path='data/nuscenes/kmeans_plan_36.npy', # (3, 36, 6, 2)
     use_inverse_l2=True,
     use_kmeans_traj=True,
     use_rag=True,
@@ -256,7 +256,7 @@ train_pipeline = [
          rag_topk=5,
          cat_pred_traj=True,
          cot_with_speed=True,
-         kmeans_path='ckpts/solve_kmeans_plan_36.npy',
+         kmeans_path='data/nuscenes/kmeans_plan_36.npy',
          lane_objs_info="./data/nuscenes/lane_obj_train.pkl"),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='PadMultiViewImage', size_divisor=32),
@@ -288,7 +288,7 @@ test_pipeline = [
          cat_pred_traj=True,
          cot_with_speed=True,
          use_ego_mlp=True,
-         kmeans_path='ckpts/solve_kmeans_plan_36.npy', 
+         kmeans_path='data/nuscenes/kmeans_plan_36.npy', 
          max_length=2048,),
     dict(
         type='MultiScaleFlipAug3D',
