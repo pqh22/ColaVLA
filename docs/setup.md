@@ -8,7 +8,7 @@ Download the [nuScenes dataset](https://www.nuscenes.org/download) to `./data/nu
 
 Download the Info Files from our [huggingface datasets](https://huggingface.co/datasets/pqh22/ColaVLA).
 
-Here, we annotate each trajectory sample with meta-action labels based on vehicle driving signals and GT trajectories. The mapping between label values and specific driving strategies can be found in the **MAPPING_V3** vocabulary in [transform_3d.py](./projects/mmdet3d_plugin/datasets/pipelines/transform_3d.py).
+Here, we annotate each trajectory sample with meta-action labels based on vehicle driving signals and GT trajectories. The mapping between label values and specific driving strategies can be found in the **MAPPING_V3** vocabulary in [transform_3d.py](../projects/mmdet3d_plugin/datasets/pipelines/transform_3d.py).
 
 **3. Pretrained Weights**
 ```shell
@@ -39,7 +39,7 @@ pip install -e .
 cd ..
 pip install -r requirements.txt
 ```
-We also provide detailed package versions in [environment.yml](./docs/environment.yml).
+We also provide detailed package versions in [environment.yml](./environment.yml).
 
 After preparation, you will be able to see the following directory structure:  
 

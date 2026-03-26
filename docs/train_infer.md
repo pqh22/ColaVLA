@@ -17,7 +17,7 @@ bash launch_train.sh projects/configs/colavla_epoch10_msarplv2_ms6_seqformer_wck
 ## Evaluation
 **1. OpenLoop Planning**
 
-We use ColaVLA as the main example. The process has two steps: first run model inference and save predicted trajectories locally, then compute metrics using [evaluation files](./evaluation/eval_planning_pkl.py). We use 8 GPUs for inference by default.
+We use ColaVLA as the main example. The process has two steps: first run model inference and save predicted trajectories locally, then compute metrics using [evaluation files](../evaluation/eval_planning_pkl.py). We use 8 GPUs for inference by default.
 
 ```bash
 bash launch_test.sh projects/configs/colavla_epoch10_msarplv2_ms6_seqformer_wckpt_fullcontext_regw80_pretraintraj_globalreason_top3pred.py ckpts/colavla_iter8790.pth 8 --format-only
@@ -37,7 +37,7 @@ ln -s ../neuro-ncap neuro-ncap
 ln -s ../neurad-studio neurad-studio
 ```
 
-Then follow the [NeuroNcap](https://github.com/atonderski/neuro-ncap) documentation to download the required checkpoints and dependencies. You can still refer to the package versions in our [environment.yml](./docs/environment.yml).
+Then follow the [NeuroNcap](https://github.com/atonderski/neuro-ncap) documentation to download the required checkpoints and dependencies. You can still refer to the package versions in our [environment.yml](./environment.yml).
 
 Finally, run the provided scripts directly. We additionally provide a closed-loop testing script that can run on a single local GPU; related files are in `./inference_closed_loop`.
 The corresponding command is:
